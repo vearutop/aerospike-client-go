@@ -74,7 +74,9 @@ func (cmd *readCommand) parseResult(ifc command, conn *Connection) Error {
 		return newError(rp.resultCode)
 	}
 
-	if cmd.object == nil {
+	if cmd.binReceiver != nil {
+		return rp.parseRecordInto(cmd.binReceiver)
+	} else if cmd.object == nil {
 		if rp.opCount == 0 {
 			// data Bin was not returned
 			cmd.record = newRecord(cmd.node, cmd.key, nil, rp.generation, rp.expiration)

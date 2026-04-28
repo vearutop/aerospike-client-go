@@ -429,6 +429,18 @@ Example:
   err := client.PutBins(nil, key, bin1, bin2, bin3, bin4)
 ```
 
+### PutBinsIter(policy *WritePolicy, key *Key, bins BinValueIter) error
+
+Writes a record to the database cluster using a caller-provided bin iterator.
+This avoids `BinMap` allocation and can also avoid temporary `Bin` allocations
+when you expose values directly from your own structs or slices.
+
+### GetBins(policy *BasePolicy, key *Key, receiver RawBinReceiver, bins ...string) error
+
+Reads bins for a record and streams them into a receiver without constructing a
+`Record` or `BinMap`. The bin name bytes and value bytes are only valid during
+the callback and should be copied if they need to escape it.
+
 <!--
 ################################################################################
 touch()

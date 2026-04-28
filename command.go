@@ -701,11 +701,16 @@ func (cmd *baseCommand) writeTxn(txn *Txn, sendDeadline bool) {
 //-------------------------------------------
 
 // Writes the command for write operations
-func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, key *Key, bins []*Bin, binMap BinMap) Error {
+func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, key *Key, bins []*Bin, binMap BinMap, binIter BinValueIter) Error {
 	cmd.begin()
 	fieldCount, err := cmd.estimateKeySize(policy.GetBasePolicy(), key, true)
 	if err != nil {
 		return err
+	}
+
+	var binEncoder BinValueEncoderIter
+	if binIter != nil {
+		binEncoder, _ = binIter.(BinValueEncoderIter)
 	}
 
 	predSize := 0
@@ -719,16 +724,31 @@ func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, k
 		}
 	}
 
-	if binMap == nil {
+	if binMap == nil && binIter == nil {
 		for i := range bins {
 			if err := cmd.estimateOperationSizeForBin(bins[i]); err != nil {
 				return err
 			}
 		}
-	} else {
+	} else if binMap != nil {
 		for name, value := range binMap {
 			if err := cmd.estimateOperationSizeForBinNameAndValue(name, value); err != nil {
 				return err
+			}
+		}
+	} else {
+		for i := 0; i < binIter.Len(); i++ {
+			if binEncoder != nil {
+				name, _, valueSize, err := binEncoder.EstimateBin(i)
+				if err != nil {
+					return err
+				}
+				cmd.estimateOperationSizeForBinNameAndSize(name, valueSize)
+			} else {
+				name, value := binIter.Bin(i)
+				if err := cmd.estimateOperationSizeForBinNameAndValueValue(name, value); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -737,10 +757,12 @@ func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, k
 		return err
 	}
 
-	if binMap == nil {
+	if binMap == nil && binIter == nil {
 		cmd.writeHeaderWrite(policy, _INFO2_WRITE, fieldCount, len(bins))
-	} else {
+	} else if binMap != nil {
 		cmd.writeHeaderWrite(policy, _INFO2_WRITE, fieldCount, len(binMap))
+	} else {
+		cmd.writeHeaderWrite(policy, _INFO2_WRITE, fieldCount, binIter.Len())
 	}
 
 	if err := cmd.writeKeyWithPolicy(&policy.BasePolicy, key, true); err != nil {
@@ -753,16 +775,33 @@ func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, k
 		}
 	}
 
-	if binMap == nil {
+	if binMap == nil && binIter == nil {
 		for i := range bins {
 			if err := cmd.writeOperationForBin(bins[i], operation); err != nil {
 				return err
 			}
 		}
-	} else {
+	} else if binMap != nil {
 		for name, value := range binMap {
 			if err := cmd.writeOperationForBinNameAndValue(name, value, operation); err != nil {
 				return err
+			}
+		}
+	} else {
+		for i := 0; i < binIter.Len(); i++ {
+			if binEncoder != nil {
+				name, particleType, valueSize, err := binEncoder.EstimateBin(i)
+				if err != nil {
+					return err
+				}
+				if err := cmd.writeOperationForBinNameAndEncoder(name, particleType, valueSize, operation, binEncoder, i); err != nil {
+					return err
+				}
+			} else {
+				name, value := binIter.Bin(i)
+				if err := cmd.writeOperationForBinNameAndValueValue(name, value, operation); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -2969,6 +3008,20 @@ func (cmd *baseCommand) estimateOperationSizeForBinNameAndValue(name string, val
 	return nil
 }
 
+func (cmd *baseCommand) estimateOperationSizeForBinNameAndValueValue(name string, value Value) Error {
+	cmd.dataOffset += len(name) + int(_OPERATION_HEADER_SIZE)
+	sz, err := value.EstimateSize()
+	if err != nil {
+		return err
+	}
+	cmd.dataOffset += sz
+	return nil
+}
+
+func (cmd *baseCommand) estimateOperationSizeForBinNameAndSize(name string, valueSize int) {
+	cmd.dataOffset += len(name) + int(_OPERATION_HEADER_SIZE) + valueSize
+}
+
 func (cmd *baseCommand) estimateOperationSizeForOperation(operation *Operation, isBatch bool) Error {
 	if isBatch && operation.opType.isWrite {
 		return newError(types.PARAMETER_ERROR, "Write operations not allowed in batch read")
@@ -3332,6 +3385,43 @@ func (cmd *baseCommand) writeOperationForBinNameAndValue(name string, val any, o
 	cmd.WriteByte((byte(nameLength)))
 	cmd.dataOffset += nameLength
 	_, err = v.write(cmd)
+	return err
+}
+
+func (cmd *baseCommand) writeOperationForBinNameAndValueValue(name string, v Value, operation OperationType) Error {
+	nameLength, valid := cmd.writeAndValidateBinName(name)
+	if !valid {
+		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long or empty, it must be between 1 and %d bytes.", name, maxBinNameLength))
+	}
+
+	valueLength, err := v.EstimateSize()
+	if err != nil {
+		return err
+	}
+
+	cmd.WriteInt32(int32(nameLength + valueLength + 4))
+	cmd.WriteByte(operation.op)
+	cmd.WriteByte(byte(v.GetType()))
+	cmd.WriteByte(0)
+	cmd.WriteByte(byte(nameLength))
+	cmd.dataOffset += nameLength
+	_, err = v.write(cmd)
+	return err
+}
+
+func (cmd *baseCommand) writeOperationForBinNameAndEncoder(name string, particleType int, valueLength int, operation OperationType, encoder BinValueEncoderIter, index int) Error {
+	nameLength, valid := cmd.writeAndValidateBinName(name)
+	if !valid {
+		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long or empty, it must be between 1 and %d bytes.", name, maxBinNameLength))
+	}
+
+	cmd.WriteInt32(int32(nameLength + valueLength + 4))
+	cmd.WriteByte(operation.op)
+	cmd.WriteByte(byte(particleType))
+	cmd.WriteByte(0)
+	cmd.WriteByte(byte(nameLength))
+	cmd.dataOffset += nameLength
+	_, err := encoder.WriteBin(index, cmd)
 	return err
 }
 

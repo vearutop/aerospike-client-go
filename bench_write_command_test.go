@@ -32,7 +32,7 @@ func doPut(set string, value any, b *testing.B) {
 	key, _ := NewKey("test", set, 1000)
 
 	for i := 0; i < b.N; i++ {
-		command, err := newWriteCommand(nil, policy, key, bins, nil, _WRITE)
+		command, err := newWriteCommand(nil, policy, key, bins, nil, nil, _WRITE)
 		if err != nil {
 			panic(err)
 		}

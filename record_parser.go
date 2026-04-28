@@ -202,3 +202,30 @@ func (rp *recordParser) parseRecord(key *Key, isOperation bool) (*Record, Error)
 
 	return newRecord(rp.cmd.node, key, bins, rp.generation, rp.expiration), nil
 }
+
+func (rp *recordParser) parseRecordInto(receiver RawBinReceiver) Error {
+	if headerReceiver, ok := receiver.(BinHeaderReceiver); ok {
+		headerReceiver.SetHeader(rp.generation, rp.expiration)
+	}
+
+	receiveOffset := rp.cmd.dataOffset
+	for i := 0; i < rp.opCount; i++ {
+		opSize := int(Buffer.BytesToUint32(rp.cmd.dataBuffer, receiveOffset))
+		particleType := int(rp.cmd.dataBuffer[receiveOffset+5])
+		nameSize := int(rp.cmd.dataBuffer[receiveOffset+7])
+		nameOffset := receiveOffset + 8
+		receiveOffset += 4 + 4 + nameSize
+
+		particleBytesSize := opSize - (4 + nameSize)
+		value := RawBinValue{
+			particleType: particleType,
+			buf:          rp.cmd.dataBuffer[receiveOffset : receiveOffset+particleBytesSize],
+		}
+		if err := receiver.SetBin(rp.cmd.dataBuffer[nameOffset:nameOffset+nameSize], value); err != nil {
+			return err
+		}
+		receiveOffset += particleBytesSize
+	}
+
+	return nil
+}

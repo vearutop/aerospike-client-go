@@ -186,8 +186,10 @@ func TestMain(m *testing.M) {
 	rand.Seed(time.Now().UnixNano())
 	flag.Parse()
 
-	// setup the client object
-	initTestVars()
+	// setup the client object unless the caller explicitly requests mock-only runs.
+	if os.Getenv("AS_SKIP_TEST_MAIN_CONNECT") != "1" {
+		initTestVars()
+	}
 	os.Exit(m.Run())
 }
 

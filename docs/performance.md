@@ -39,3 +39,5 @@ Please let us know if you can suggest an improvement anywhere in the library.
 3. **Using `Bin` objects in `Put` operations instead of BinMaps**: `Put` method requires you to pass a map for bin values. While convenient, it will allocate an array of bins on each call, iterate on the map, and make `Bin` objects to use.
 
   If performance is absolutely important, use `PutBins` method and pass bins yourself.
+
+4. **Use `PutBinsIter` and `GetBins` on the hottest paths**: If even temporary `Bin` objects or returned `Record.Bins` maps show up in your allocation profile, expose bins through a custom `BinValueIter` implementation on writes and decode reads with `GetBins` + `RawBinReceiver` into caller-owned storage.

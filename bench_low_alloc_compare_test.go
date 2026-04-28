@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+
+	ParticleType "github.com/aerospike/aerospike-client-go/v8/types/particle_type"
 )
 
 var (
@@ -416,6 +418,62 @@ func BenchmarkLowAllocReadPaths(b *testing.B) {
 				b.Fatal(benchmarkLowAllocErr)
 			}
 			benchmarkLowAllocCallback = cb
+		}
+	})
+}
+
+func BenchmarkLowAllocReadPathsCollections(b *testing.B) {
+	payload := buildMockRecordPayload(b, []mockPayloadBin{
+		{name: "ratio32", value: NewRawBlobValue(ParticleType.FLOAT, []byte{0x40, 0x60, 0x00, 0x00})},
+		{name: "unsigned", value: NewRawBlobValue(ParticleType.INTEGER, []byte{0, 0, 0, 0, 0, 0, 0, 42})},
+		{name: "none", value: NewNullValue()},
+		{name: "geo", value: NewGeoJSONValue(`{"type":"Point","coordinates":[1.0,2.0]}`)},
+		{name: "hll", value: NewHLLValue([]byte{1, 2, 3, 4})},
+		{name: "tags", value: NewMapperValue(mockStringMap{"env": "prod", "region": "eu"})},
+		{name: "values", value: NewListerValue(mockIntList{1, 3, 5})},
+	})
+	key, _ := NewKey("test", "bench", "user-1")
+
+	b.Run("record_bins", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			rp := &recordParser{
+				generation: 11,
+				expiration: 22,
+				opCount:    7,
+				cmd: &baseCommand{
+					bufferEx: bufferEx{
+						dataBuffer: payload,
+						dataOffset: 0,
+					},
+				},
+			}
+			benchmarkLowAllocRecord, benchmarkLowAllocErr = rp.parseRecord(key, false)
+			if benchmarkLowAllocErr != nil {
+				b.Fatal(benchmarkLowAllocErr)
+			}
+		}
+	})
+
+	b.Run("callback", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			var cb mockCollectionCallbackReceiver
+			rp := &recordParser{
+				generation: 11,
+				expiration: 22,
+				opCount:    7,
+				cmd: &baseCommand{
+					bufferEx: bufferEx{
+						dataBuffer: payload,
+						dataOffset: 0,
+					},
+				},
+			}
+			benchmarkLowAllocErr = rp.parseRecordInto(&cb)
+			if benchmarkLowAllocErr != nil {
+				b.Fatal(benchmarkLowAllocErr)
+			}
 		}
 	})
 }

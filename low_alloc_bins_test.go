@@ -15,9 +15,10 @@
 package aerospike_test
 
 import (
-	as "github.com/aerospike/aerospike-client-go/v8"
-	ParticleType "github.com/aerospike/aerospike-client-go/v8/types/particle_type"
+	"fmt"
+	"sync"
 
+	as "github.com/aerospike/aerospike-client-go/v8"
 	gg "github.com/onsi/ginkgo/v2"
 	gm "github.com/onsi/gomega"
 )
@@ -27,30 +28,15 @@ type testBinIter struct {
 	name  string
 }
 
-func (t testBinIter) Len() int {
-	return 2
+func (t *testBinIter) InitialBufferSize() int {
+	return 2*8 + len("count") + len("name") + len(t.name)
 }
 
-func (t testBinIter) EstimateBin(i int) (string, int, int, as.Error) {
-	switch i {
-	case 0:
-		return "count", ParticleType.INTEGER, 8, nil
-	case 1:
-		return "name", ParticleType.STRING, len(t.name), nil
-	default:
-		return "", 0, 0, as.ErrInvalidObjectType
+func (t *testBinIter) WriteBins(w as.BinWriter) as.Error {
+	if err := w.WriteInt("count", t.count); err != nil {
+		return err
 	}
-}
-
-func (t testBinIter) WriteBin(i int, cmd as.BufferEx) (int, as.Error) {
-	switch i {
-	case 0:
-		return cmd.WriteInt64(int64(t.count)), nil
-	case 1:
-		return cmd.WriteString(t.name)
-	default:
-		return 0, as.ErrInvalidObjectType
-	}
+	return w.WriteString("name", t.name)
 }
 
 type testRawBinReceiver struct {
@@ -91,7 +77,8 @@ var _ = gg.Describe("Low allocation bin APIs", func() {
 		key, err := as.NewKey(ns, set, randString(50))
 		gm.Expect(err).ToNot(gm.HaveOccurred())
 
-		err = client.PutBinsIter(nil, key, testBinIter{count: 42, name: "fast"})
+		iter := testBinIter{count: 42, name: "fast"}
+		err = client.PutBinsIter(nil, key, &iter)
 		gm.Expect(err).ToNot(gm.HaveOccurred())
 
 		rec, err := client.Get(nil, key)
@@ -118,5 +105,66 @@ var _ = gg.Describe("Low allocation bin APIs", func() {
 		gm.Expect(receiver.generation).To(gm.BeNumerically(">=", 1))
 		gm.Expect(receiver.count).To(gm.Equal(int64(7)))
 		gm.Expect(receiver.name).To(gm.Equal("streamed"))
+	})
+
+	gg.It("supports concurrent low allocation read and write paths", func() {
+		ns := *namespace
+		set := randString(50)
+
+		const workers = 8
+		const iterations = 16
+
+		errCh := make(chan error, workers*iterations)
+		var wg sync.WaitGroup
+
+		for worker := 0; worker < workers; worker++ {
+			worker := worker
+			wg.Add(1)
+
+			go func() {
+				defer gg.GinkgoRecover()
+				defer wg.Done()
+
+				for i := 0; i < iterations; i++ {
+					expectedCount := worker*100 + i
+					expectedName := fmt.Sprintf("fast-%d-%d", worker, i)
+
+					key, err := as.NewKey(ns, set, fmt.Sprintf("lowalloc-%d-%d", worker, i))
+					if err != nil {
+						errCh <- err
+						return
+					}
+
+					iter := testBinIter{count: expectedCount, name: expectedName}
+					if err := client.PutBinsIter(nil, key, &iter); err != nil {
+						errCh <- err
+						return
+					}
+
+					var receiver testRawBinReceiver
+					if err := client.GetBins(nil, key, &receiver, "count", "name"); err != nil {
+						errCh <- err
+						return
+					}
+
+					if receiver.count != int64(expectedCount) {
+						errCh <- fmt.Errorf("count mismatch: got %d want %d", receiver.count, expectedCount)
+						return
+					}
+
+					if receiver.name != expectedName {
+						errCh <- fmt.Errorf("name mismatch: got %q want %q", receiver.name, expectedName)
+						return
+					}
+				}
+			}()
+		}
+
+		wg.Wait()
+		close(errCh)
+
+		for err := range errCh {
+			gm.Expect(err).ToNot(gm.HaveOccurred())
+		}
 	})
 })

@@ -42,6 +42,32 @@ func benchmarkMockObjects(size int) []mockObject {
 	return objects
 }
 
+type benchmarkCollectionObject struct {
+	ID     int
+	Name   string
+	Score  int64
+	Tags   mockStringMap
+	Values mockIntList
+}
+
+func benchmarkCollectionObjects(size int) []benchmarkCollectionObject {
+	objects := make([]benchmarkCollectionObject, size)
+	for i := range objects {
+		objects[i] = benchmarkCollectionObject{
+			ID:    i + 1,
+			Name:  fmt.Sprintf("user-%04d", i),
+			Score: int64(i*17 + 99),
+			Tags: mockStringMap{
+				"env":    "prod",
+				"region": fmt.Sprintf("r%d", i%8),
+			},
+			Values: mockIntList{i, i + 1, i + 2, i + 3},
+		}
+	}
+
+	return objects
+}
+
 func BenchmarkLowAllocWritePaths(b *testing.B) {
 	policy := NewWritePolicy(0, 0)
 	key, _ := NewKey("test", "bench", "user-1")
@@ -227,6 +253,84 @@ func BenchmarkLowAllocWritePathsSteadyState(b *testing.B) {
 		dataBuffer := make([]byte, bufferSize)
 		for i := 0; i < b.N; i++ {
 			cmd, err := newWriteCommand(nil, policy, key, nil, marshal(obj), nil, _WRITE)
+			if err != nil {
+				b.Fatal(err)
+			}
+			cmd.baseCommand.dataBuffer = dataBuffer
+			if err := cmd.writeBuffer(&cmd); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkLowAllocWritePathsCollections(b *testing.B) {
+	policy := NewWritePolicy(0, 0)
+	key, _ := NewKey("test", "bench", "user-1")
+	bufferSize := 1024
+	objects := benchmarkCollectionObjects(1024)
+
+	b.Run("bins_fresh", func(b *testing.B) {
+		b.ReportAllocs()
+		dataBuffer := make([]byte, bufferSize)
+		for i := 0; i < b.N; i++ {
+			obj := objects[i%len(objects)]
+			bins := []*Bin{
+				{Name: "id", Value: IntegerValue(obj.ID)},
+				{Name: "name", Value: StringValue(obj.Name)},
+				{Name: "score", Value: LongValue(obj.Score)},
+				{Name: "tags", Value: NewMapperValue(obj.Tags)},
+				{Name: "values", Value: NewListerValue(obj.Values)},
+			}
+
+			cmd, err := newWriteCommand(nil, policy, key, bins, nil, nil, _WRITE)
+			if err != nil {
+				b.Fatal(err)
+			}
+			cmd.baseCommand.dataBuffer = dataBuffer
+			if err := cmd.writeBuffer(&cmd); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("iter_fast", func(b *testing.B) {
+		b.ReportAllocs()
+		dataBuffer := make([]byte, bufferSize)
+		iter := mockWriteIter{}
+		for i := 0; i < b.N; i++ {
+			obj := objects[i%len(objects)]
+			iter.id = obj.ID
+			iter.name = obj.Name
+			iter.score = obj.Score
+			iter.tags = obj.Tags
+			iter.values = obj.Values
+
+			cmd, err := newWriteCommand(nil, policy, key, nil, nil, &iter, _WRITE)
+			if err != nil {
+				b.Fatal(err)
+			}
+			cmd.baseCommand.dataBuffer = dataBuffer
+			if err := cmd.writeBuffer(&cmd); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("binmap_fresh", func(b *testing.B) {
+		b.ReportAllocs()
+		dataBuffer := make([]byte, bufferSize)
+		for i := 0; i < b.N; i++ {
+			obj := objects[i%len(objects)]
+			binMap := BinMap{
+				"id":     obj.ID,
+				"name":   obj.Name,
+				"score":  obj.Score,
+				"tags":   obj.Tags,
+				"values": obj.Values,
+			}
+
+			cmd, err := newWriteCommand(nil, policy, key, nil, binMap, nil, _WRITE)
 			if err != nil {
 				b.Fatal(err)
 			}

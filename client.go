@@ -477,13 +477,15 @@ func (clnt *Client) PutBins(policy *WritePolicy, key *Key, bins ...*Bin) Error {
 }
 
 // PutBinsIter writes record bin(s) to the server using a caller-provided bin
-// iterator.
+// encoder.
 //
-// This method avoids BinMap allocation and can also avoid temporary Bin
-// allocations when the caller exposes bins from its own data structures.
-func (clnt *Client) PutBinsIter(policy *WritePolicy, key *Key, bins BinValueIter) Error {
+// This method avoids BinMap allocation and can also avoid temporary Bin and
+// Value allocations when the caller exposes bins from its own data structures.
+// Record-level write semantics such as generation checks and expiration remain
+// controlled by WritePolicy.
+func (clnt *Client) PutBinsIter(policy *WritePolicy, key *Key, bins BinEncoder) Error {
 	if bins == nil {
-		return newError(types.PARAMETER_ERROR, "bins iterator is nil")
+		return newError(types.PARAMETER_ERROR, "bin encoder is nil")
 	}
 
 	policy = clnt.getUsableWritePolicy(policy)
@@ -546,10 +548,10 @@ func (clnt *Client) AppendBins(policy *WritePolicy, key *Key, bins ...*Bin) Erro
 	return command.Execute()
 }
 
-// AppendBinsIter works the same as Append, but accepts a caller-provided bin iterator.
-func (clnt *Client) AppendBinsIter(policy *WritePolicy, key *Key, bins BinValueIter) Error {
+// AppendBinsIter works the same as Append, but accepts a caller-provided bin encoder.
+func (clnt *Client) AppendBinsIter(policy *WritePolicy, key *Key, bins BinEncoder) Error {
 	if bins == nil {
-		return newError(types.PARAMETER_ERROR, "bins iterator is nil")
+		return newError(types.PARAMETER_ERROR, "bin encoder is nil")
 	}
 
 	policy = clnt.getUsableWritePolicy(policy)
@@ -608,10 +610,10 @@ func (clnt *Client) PrependBins(policy *WritePolicy, key *Key, bins ...*Bin) Err
 	return command.Execute()
 }
 
-// PrependBinsIter works the same as Prepend, but accepts a caller-provided bin iterator.
-func (clnt *Client) PrependBinsIter(policy *WritePolicy, key *Key, bins BinValueIter) Error {
+// PrependBinsIter works the same as Prepend, but accepts a caller-provided bin encoder.
+func (clnt *Client) PrependBinsIter(policy *WritePolicy, key *Key, bins BinEncoder) Error {
 	if bins == nil {
-		return newError(types.PARAMETER_ERROR, "bins iterator is nil")
+		return newError(types.PARAMETER_ERROR, "bin encoder is nil")
 	}
 
 	policy = clnt.getUsableWritePolicy(policy)
@@ -674,10 +676,10 @@ func (clnt *Client) AddBins(policy *WritePolicy, key *Key, bins ...*Bin) Error {
 	return command.Execute()
 }
 
-// AddBinsIter works the same as Add, but accepts a caller-provided bin iterator.
-func (clnt *Client) AddBinsIter(policy *WritePolicy, key *Key, bins BinValueIter) Error {
+// AddBinsIter works the same as Add, but accepts a caller-provided bin encoder.
+func (clnt *Client) AddBinsIter(policy *WritePolicy, key *Key, bins BinEncoder) Error {
 	if bins == nil {
-		return newError(types.PARAMETER_ERROR, "bins iterator is nil")
+		return newError(types.PARAMETER_ERROR, "bin encoder is nil")
 	}
 
 	policy = clnt.getUsableWritePolicy(policy)

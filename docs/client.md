@@ -429,11 +429,18 @@ Example:
   err := client.PutBins(nil, key, bin1, bin2, bin3, bin4)
 ```
 
-### PutBinsIter(policy *WritePolicy, key *Key, bins BinValueIter) error
+### PutBinsIter(policy *WritePolicy, key *Key, bins BinEncoder) error
 
-Writes a record to the database cluster using a caller-provided bin iterator.
+Writes a record to the database cluster using a caller-provided bin encoder.
+The encoder writes bins once through typed writer methods such as
+`WriteString`, `WriteInt`, `WriteInt64`, `WriteUint64`, `WriteBytes`,
+`WriteBool`, `WriteFloat32`, `WriteFloat64`, `WriteNull`, `WriteGeoJSON`,
+`WriteHLL`, `WriteList`, and `WriteMap`. If the encoder also implements
+`BinSizeHint`, the client uses that value as an initial buffer-capacity hint.
 This avoids `BinMap` allocation and temporary `Bin`/`Value` allocations when
-you expose values directly from your own structs or slices.
+you expose values directly from your own structs or slices. Record generation
+checks, expiration, and other write semantics are still controlled through the
+`WritePolicy`.
 
 ### GetBins(policy *BasePolicy, key *Key, receiver RawBinReceiver, bins ...string) error
 

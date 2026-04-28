@@ -429,7 +429,7 @@ Example:
   err := client.PutBins(nil, key, bin1, bin2, bin3, bin4)
 ```
 
-### PutBinsIter(policy *WritePolicy, key *Key, bins BinEncoder) error
+### PutEncodedBins(policy *WritePolicy, key *Key, bins BinEncoder) error
 
 Writes a record to the database cluster using a caller-provided bin encoder.
 The encoder writes bins once through typed writer methods such as

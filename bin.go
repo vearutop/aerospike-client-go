@@ -34,7 +34,7 @@ type BinWriter struct {
 	operation OperationType
 }
 
-// BinEncoder is the low-allocation write path for PutBinsIter-style APIs.
+// BinEncoder is the low-allocation write path for encoded bin APIs.
 //
 // WriteBins is called once to emit bins into the command buffer.
 type BinEncoder interface {

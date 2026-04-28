@@ -78,7 +78,7 @@ var _ = gg.Describe("Low allocation bin APIs", func() {
 		gm.Expect(err).ToNot(gm.HaveOccurred())
 
 		iter := testBinIter{count: 42, name: "fast"}
-		err = client.PutBinsIter(nil, key, &iter)
+		err = client.PutEncodedBins(nil, key, &iter)
 		gm.Expect(err).ToNot(gm.HaveOccurred())
 
 		rec, err := client.Get(nil, key)
@@ -136,7 +136,7 @@ var _ = gg.Describe("Low allocation bin APIs", func() {
 					}
 
 					iter := testBinIter{count: expectedCount, name: expectedName}
-					if err := client.PutBinsIter(nil, key, &iter); err != nil {
+					if err := client.PutEncodedBins(nil, key, &iter); err != nil {
 						errCh <- err
 						return
 					}

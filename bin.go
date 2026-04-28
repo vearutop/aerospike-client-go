@@ -37,6 +37,10 @@ type BinWriter struct {
 // BinEncoder is the low-allocation write path for encoded bin APIs.
 //
 // WriteBins is called once to emit bins into the command buffer.
+//
+// Implement BinEncoder on a pointer type when possible and pass that pointer
+// to PutEncodedBins-style APIs. That avoids copying the whole encoder value
+// into the interface and tends to keep the hot path cheaper.
 type BinEncoder interface {
 	WriteBins(w BinWriter) Error
 }

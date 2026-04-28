@@ -123,7 +123,7 @@ func BenchmarkLowAllocWritePaths(b *testing.B) {
 		}
 	})
 
-	b.Run("iter_fast", func(b *testing.B) {
+	b.Run("encoded_bins", func(b *testing.B) {
 		b.ReportAllocs()
 		dataBuffer := make([]byte, bufferSize)
 		iter := mockWriteIter{}
@@ -235,7 +235,7 @@ func BenchmarkLowAllocWritePathsSteadyState(b *testing.B) {
 		}
 	})
 
-	b.Run("iter_fast", func(b *testing.B) {
+	b.Run("encoded_bins", func(b *testing.B) {
 		b.ReportAllocs()
 		dataBuffer := make([]byte, bufferSize)
 		for i := 0; i < b.N; i++ {
@@ -296,7 +296,7 @@ func BenchmarkLowAllocWritePathsCollections(b *testing.B) {
 		}
 	})
 
-	b.Run("iter_fast", func(b *testing.B) {
+	b.Run("encoded_bins", func(b *testing.B) {
 		b.ReportAllocs()
 		dataBuffer := make([]byte, bufferSize)
 		iter := mockWriteIter{}
@@ -398,7 +398,7 @@ func BenchmarkLowAllocReadPaths(b *testing.B) {
 		}
 	})
 
-	b.Run("callback", func(b *testing.B) {
+	b.Run("decoded_bins", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			var cb mockCallbackReceiver
@@ -455,7 +455,7 @@ func BenchmarkLowAllocReadPathsCollections(b *testing.B) {
 		}
 	})
 
-	b.Run("callback", func(b *testing.B) {
+	b.Run("decoded_bins", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			var cb mockCollectionCallbackReceiver

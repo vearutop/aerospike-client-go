@@ -922,7 +922,7 @@ func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, k
 	initialSize := cmd.dataOffset
 	if binEncoder != nil {
 		if hint, ok := binEncoder.(BinSizeHint); ok {
-			initialSize += hint.InitialBufferSize()
+			initialSize += hint.EncodedBinsSizeHint()
 		}
 	}
 	if err := cmd.sizeBufferSz(initialSize, policy.compress()); err != nil {

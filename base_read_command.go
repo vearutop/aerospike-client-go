@@ -31,7 +31,7 @@ type baseReadCommand struct {
 	// pointer to the object that's going to be unmarshalled
 	object *reflect.Value
 
-	binReceiver RawBinReceiver
+	binReceiver BinDecoder
 
 	replicaSequence int
 }

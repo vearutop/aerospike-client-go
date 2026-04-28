@@ -28,7 +28,7 @@ type testBinIter struct {
 	name  string
 }
 
-func (t *testBinIter) InitialBufferSize() int {
+func (t *testBinIter) EncodedBinsSizeHint() int {
 	return 2*8 + len("count") + len("name") + len(t.name)
 }
 
@@ -51,7 +51,7 @@ func (t *testRawBinReceiver) SetHeader(generation uint32, expiration uint32) {
 	t.expiration = expiration
 }
 
-func (t *testRawBinReceiver) SetBin(name []byte, value as.RawBinValue) as.Error {
+func (t *testRawBinReceiver) SetBin(name []byte, value as.RawValue) as.Error {
 	switch string(name) {
 	case "count":
 		v, ok := value.Int64()
@@ -100,7 +100,7 @@ var _ = gg.Describe("Low allocation bin APIs", func() {
 		gm.Expect(err).ToNot(gm.HaveOccurred())
 
 		var receiver testRawBinReceiver
-		err = client.GetBins(nil, key, &receiver, "count", "name")
+		err = client.GetDecodedBins(nil, key, &receiver, "count", "name")
 		gm.Expect(err).ToNot(gm.HaveOccurred())
 		gm.Expect(receiver.generation).To(gm.BeNumerically(">=", 1))
 		gm.Expect(receiver.count).To(gm.Equal(int64(7)))
@@ -142,7 +142,7 @@ var _ = gg.Describe("Low allocation bin APIs", func() {
 					}
 
 					var receiver testRawBinReceiver
-					if err := client.GetBins(nil, key, &receiver, "count", "name"); err != nil {
+					if err := client.GetDecodedBins(nil, key, &receiver, "count", "name"); err != nil {
 						errCh <- err
 						return
 					}

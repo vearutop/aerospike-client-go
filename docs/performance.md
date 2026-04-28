@@ -40,4 +40,4 @@ Please let us know if you can suggest an improvement anywhere in the library.
 
   If performance is absolutely important, use `PutBins` method and pass bins yourself.
 
-4. **Use `PutEncodedBins` and `GetBins` on the hottest paths**: If even temporary `Bin` objects or returned `Record.Bins` maps show up in your allocation profile, expose bins through a custom `BinEncoder` implementation on writes and decode reads with `GetBins` + `RawBinReceiver` into caller-owned storage. `BinWriter` covers scalar particles, null, GeoJSON, HLL, plus `ListIter` and `MapIter` for collection bins without going through `Value` or reflection.
+4. **Use `PutEncodedBins` and `GetDecodedBins` on the hottest paths**: If even temporary `Bin` objects or returned `Record.Bins` maps show up in your allocation profile, expose bins through a custom `BinEncoder` implementation on writes and decode reads with `GetDecodedBins` + `BinDecoder` into caller-owned storage. `BinWriter` covers scalar particles, null, GeoJSON, HLL, plus `ListIter` and `MapIter` for collection bins without going through `Value` or reflection.

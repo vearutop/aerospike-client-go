@@ -837,12 +837,12 @@ func (clnt *Client) Get(policy *BasePolicy, key *Key, binNames ...string) (*Reco
 	return command.GetRecord(), nil
 }
 
-// GetBins reads selected bins for the specified key and streams them into the
+// GetDecodedBins reads selected bins for the specified key and streams them into the
 // provided receiver without constructing a Record or BinMap.
 //
 // Bin names and raw value bytes alias the command buffer and are only valid for
 // the duration of each callback.
-func (clnt *Client) GetBins(policy *BasePolicy, key *Key, receiver RawBinReceiver, binNames ...string) Error {
+func (clnt *Client) GetDecodedBins(policy *BasePolicy, key *Key, receiver BinDecoder, binNames ...string) Error {
 	if receiver == nil {
 		return newError(types.PARAMETER_ERROR, "bin receiver is nil")
 	}

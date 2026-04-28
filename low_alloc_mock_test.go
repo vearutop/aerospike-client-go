@@ -76,7 +76,7 @@ func (m *mockCallbackReceiver) SetHeader(generation uint32, expiration uint32) {
 	m.expiration = expiration
 }
 
-func (m *mockCallbackReceiver) SetBin(name []byte, value RawBinValue) Error {
+func (m *mockCallbackReceiver) SetBin(name []byte, value RawValue) Error {
 	switch string(name) {
 	case "id":
 		v, ok := value.Int64()
@@ -111,7 +111,7 @@ type mockCollectionCallbackReceiver struct {
 	values   []int64
 }
 
-func (m *mockCollectionCallbackReceiver) SetBin(name []byte, value RawBinValue) Error {
+func (m *mockCollectionCallbackReceiver) SetBin(name []byte, value RawValue) Error {
 	switch string(name) {
 	case "ratio32":
 		v, ok := value.Float32()
@@ -193,7 +193,7 @@ type mockWriteIter struct {
 	values   mockIntList
 }
 
-func (m *mockWriteIter) InitialBufferSize() int {
+func (m *mockWriteIter) EncodedBinsSizeHint() int {
 	tagsSize, _ := PackMap(nil, m.tags)
 	valuesSize, _ := PackList(nil, m.values)
 	return 10*int(_OPERATION_HEADER_SIZE) +

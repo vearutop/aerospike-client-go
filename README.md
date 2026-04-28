@@ -125,7 +125,7 @@ To read about performance variables, please refer to [`docs/performance.md`](doc
 For allocation-sensitive code paths, prefer:
 - `PutBins` with caller-managed reusable `[]*Bin` when you already have bins prepared
 - `PutEncodedBins` with a custom `BinEncoder` when you want to write directly from your own structs without temporary `Bin` or `Value` objects
-- `GetBins` with a `RawBinReceiver` when you want to avoid building `Record.Bins`
+- `GetDecodedBins` with a `BinDecoder` when you want to avoid building `Record.Bins`
 
 <a name="Tests"></a>
 ## Tests

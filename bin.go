@@ -59,23 +59,37 @@ type BinHeaderReceiver interface {
 type RawBinValue struct {
 	particleType int
 	buf          []byte
+	packed       bool
 }
+
+// RawValue is the typed callback value used by low-allocation read paths.
+type RawValue = RawBinValue
 
 // ParticleType returns the Aerospike particle type of the value.
 func (rbv RawBinValue) ParticleType() int {
 	return rbv.particleType
 }
 
-// Bytes returns the raw value bytes as encoded on the wire.
+// Bytes returns the raw payload bytes for blob-like values.
 //
-// The returned slice aliases the command buffer and is only valid during the
-// GetBins callback.
+// The returned slice aliases the command buffer or packed container buffer and
+// is only valid during the callback.
 func (rbv RawBinValue) Bytes() []byte {
+	if rbv.packed {
+		payload, ok := rbv.packedBytesPayload()
+		if !ok {
+			return nil
+		}
+		return payload
+	}
 	return rbv.buf
 }
 
 // Int64 decodes integer particles without extra unpacking.
 func (rbv RawBinValue) Int64() (int64, bool) {
+	if rbv.packed {
+		return rbv.packedInt64()
+	}
 	if rbv.particleType != ParticleType.INTEGER {
 		return 0, false
 	}
@@ -83,17 +97,60 @@ func (rbv RawBinValue) Int64() (int64, bool) {
 	return Buffer.VarBytesToInt64(rbv.buf, 0, len(rbv.buf)), true
 }
 
+// Uint64 decodes unsigned integer particles without extra unpacking.
+func (rbv RawBinValue) Uint64() (uint64, bool) {
+	if rbv.packed {
+		return rbv.packedUint64()
+	}
+	if rbv.particleType != ParticleType.INTEGER {
+		return 0, false
+	}
+
+	v := Buffer.VarBytesToInt64(rbv.buf, 0, len(rbv.buf))
+	if v < 0 {
+		return 0, false
+	}
+
+	return uint64(v), true
+}
+
+// Float32 decodes float particles as float32 when possible.
+func (rbv RawBinValue) Float32() (float32, bool) {
+	if rbv.packed {
+		return rbv.packedFloat32()
+	}
+	if rbv.particleType != ParticleType.FLOAT {
+		return 0, false
+	}
+	if len(rbv.buf) == 4 {
+		return Buffer.BytesToFloat32(rbv.buf, 0), true
+	}
+	if len(rbv.buf) == 8 {
+		return float32(Buffer.BytesToFloat64(rbv.buf, 0)), true
+	}
+	return 0, false
+}
+
 // Float64 decodes float particles without extra unpacking.
 func (rbv RawBinValue) Float64() (float64, bool) {
+	if rbv.packed {
+		return rbv.packedFloat64()
+	}
 	if rbv.particleType != ParticleType.FLOAT {
 		return 0, false
 	}
 
+	if len(rbv.buf) == 4 {
+		return float64(Buffer.BytesToFloat32(rbv.buf, 0)), true
+	}
 	return Buffer.BytesToFloat64(rbv.buf, 0), true
 }
 
 // Bool decodes bool particles without extra unpacking.
 func (rbv RawBinValue) Bool() (bool, bool) {
+	if rbv.packed {
+		return rbv.packedBool()
+	}
 	if rbv.particleType != ParticleType.BOOL {
 		return false, false
 	}
@@ -103,6 +160,13 @@ func (rbv RawBinValue) Bool() (bool, bool) {
 
 // String decodes string particles.
 func (rbv RawBinValue) String() (string, bool) {
+	if rbv.packed {
+		payload, ok := rbv.packedStringPayload(ParticleType.STRING)
+		if !ok {
+			return "", false
+		}
+		return string(payload), true
+	}
 	if rbv.particleType != ParticleType.STRING {
 		return "", false
 	}
@@ -110,9 +174,61 @@ func (rbv RawBinValue) String() (string, bool) {
 	return string(rbv.buf), true
 }
 
-// Interface fully decodes the value using the standard Aerospike decoder.
-func (rbv RawBinValue) Interface() (any, Error) {
-	return bytesToParticle(rbv.particleType, rbv.buf, 0, len(rbv.buf))
+// IsNull reports whether the value is a null particle.
+func (rbv RawBinValue) IsNull() bool {
+	if rbv.packed {
+		return len(rbv.buf) == 1 && rbv.buf[0] == 0xc0
+	}
+	return rbv.particleType == ParticleType.NULL
+}
+
+// GeoJSON decodes GeoJSON particles without generic unpacking.
+func (rbv RawBinValue) GeoJSON() (string, bool) {
+	if rbv.packed {
+		payload, ok := rbv.packedStringPayload(ParticleType.GEOJSON)
+		if !ok {
+			return "", false
+		}
+		return string(payload), true
+	}
+	if rbv.particleType != ParticleType.GEOJSON || len(rbv.buf) < 3 {
+		return "", false
+	}
+
+	ncells := int(Buffer.BytesToInt16(rbv.buf, 1))
+	headerSize := 1 + 2 + (ncells * 8)
+	if len(rbv.buf) < headerSize {
+		return "", false
+	}
+	return string(rbv.buf[headerSize:]), true
+}
+
+// HLL returns the raw HyperLogLog bytes.
+func (rbv RawBinValue) HLL() ([]byte, bool) {
+	if rbv.packed {
+		payload, ok := rbv.packedBytesPayloadForType(ParticleType.HLL)
+		return payload, ok
+	}
+	if rbv.particleType != ParticleType.HLL {
+		return nil, false
+	}
+	return rbv.buf, true
+}
+
+// ForEachList iterates over list elements without decoding them into a Go slice.
+func (rbv RawBinValue) ForEachList(fn func(RawValue) Error) Error {
+	if rbv.particleType != ParticleType.LIST {
+		return ErrInvalidObjectType
+	}
+	return forEachRawList(rbv.buf, fn)
+}
+
+// ForEachMap iterates over map entries without decoding them into a Go map.
+func (rbv RawBinValue) ForEachMap(fn func(RawValue, RawValue) Error) Error {
+	if rbv.particleType != ParticleType.MAP {
+		return ErrInvalidObjectType
+	}
+	return forEachRawMap(rbv.buf, fn)
 }
 
 // RawBinReceiver receives bins directly from the wire without building a Record

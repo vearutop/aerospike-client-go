@@ -101,6 +101,77 @@ func (m *mockCallbackReceiver) SetBin(name []byte, value RawBinValue) Error {
 	return nil
 }
 
+type mockCollectionCallbackReceiver struct {
+	ratio32  float32
+	unsigned uint64
+	nullSet  bool
+	geo      string
+	hll      []byte
+	tags     map[string]string
+	values   []int64
+}
+
+func (m *mockCollectionCallbackReceiver) SetBin(name []byte, value RawBinValue) Error {
+	switch string(name) {
+	case "ratio32":
+		v, ok := value.Float32()
+		if !ok {
+			return ErrInvalidObjectType
+		}
+		m.ratio32 = v
+	case "unsigned":
+		v, ok := value.Uint64()
+		if !ok {
+			return ErrInvalidObjectType
+		}
+		m.unsigned = v
+	case "none":
+		m.nullSet = value.IsNull()
+	case "geo":
+		v, ok := value.GeoJSON()
+		if !ok {
+			return ErrInvalidObjectType
+		}
+		m.geo = v
+	case "hll":
+		v, ok := value.HLL()
+		if !ok {
+			return ErrInvalidObjectType
+		}
+		m.hll = append(m.hll[:0], v...)
+	case "tags":
+		m.tags = make(map[string]string)
+		if err := value.ForEachMap(func(key RawValue, val RawValue) Error {
+			k, ok := key.String()
+			if !ok {
+				return ErrInvalidObjectType
+			}
+			v, ok := val.String()
+			if !ok {
+				return ErrInvalidObjectType
+			}
+			m.tags[k] = v
+			return nil
+		}); err != nil {
+			return err
+		}
+	case "values":
+		m.values = m.values[:0]
+		if err := value.ForEachList(func(elem RawValue) Error {
+			v, ok := elem.Int64()
+			if !ok {
+				return ErrInvalidObjectType
+			}
+			m.values = append(m.values, v)
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 type mockObject struct {
 	TTL   uint32 `asm:"ttl"`
 	Gen   uint32 `asm:"gen"`
@@ -347,5 +418,56 @@ func TestMockWriteIterMatchesBins(t *testing.T) {
 
 	if !reflect.DeepEqual(cmdBins.dataBuffer[:cmdBins.dataOffset], cmdIter.dataBuffer[:cmdIter.dataOffset]) {
 		t.Fatalf("iter payload does not match bins payload")
+	}
+}
+
+func TestMockReadTypedCollections(t *testing.T) {
+	payload := buildMockRecordPayload(t, []mockPayloadBin{
+		{name: "ratio32", value: NewRawBlobValue(ParticleType.FLOAT, []byte{0x40, 0x60, 0x00, 0x00})},
+		{name: "unsigned", value: NewRawBlobValue(ParticleType.INTEGER, []byte{0, 0, 0, 0, 0, 0, 0, 42})},
+		{name: "none", value: NewNullValue()},
+		{name: "geo", value: NewGeoJSONValue(`{"type":"Point","coordinates":[1.0,2.0]}`)},
+		{name: "hll", value: NewHLLValue([]byte{1, 2, 3, 4})},
+		{name: "tags", value: NewMapperValue(mockStringMap{"env": "prod", "region": "eu"})},
+		{name: "values", value: NewListerValue(mockIntList{1, 3, 5})},
+	})
+
+	var cb mockCollectionCallbackReceiver
+	rp := &recordParser{
+		generation: 11,
+		expiration: 22,
+		opCount:    7,
+		cmd: &baseCommand{
+			bufferEx: bufferEx{
+				dataBuffer: payload,
+				dataOffset: 0,
+			},
+		},
+	}
+
+	if err := rp.parseRecordInto(&cb); err != nil {
+		t.Fatalf("parse callback: %v", err)
+	}
+
+	if cb.ratio32 != 3.5 {
+		t.Fatalf("ratio32 = %v", cb.ratio32)
+	}
+	if cb.unsigned != 42 {
+		t.Fatalf("unsigned = %d", cb.unsigned)
+	}
+	if !cb.nullSet {
+		t.Fatalf("null was not detected")
+	}
+	if cb.geo != `{"type":"Point","coordinates":[1.0,2.0]}` {
+		t.Fatalf("geo = %q", cb.geo)
+	}
+	if !reflect.DeepEqual(cb.hll, []byte{1, 2, 3, 4}) {
+		t.Fatalf("hll = %v", cb.hll)
+	}
+	if !reflect.DeepEqual(cb.tags, map[string]string{"env": "prod", "region": "eu"}) {
+		t.Fatalf("tags = %#v", cb.tags)
+	}
+	if !reflect.DeepEqual(cb.values, []int64{1, 3, 5}) {
+		t.Fatalf("values = %v", cb.values)
 	}
 }

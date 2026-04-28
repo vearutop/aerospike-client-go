@@ -27,18 +27,24 @@ const (
 // BinMap is used to define a map of bin names to values.
 type BinMap map[string]any
 
-// BinValueIter is the low-allocation write path for PutBinsIter-style APIs.
-// It allows callers to expose bin metadata and write predefined value types
-// directly into the wire buffer without boxing them into Value interfaces on
-// each iteration.
+// BinWriter writes bins directly into the command buffer using predefined
+// Aerospike particle types.
+type BinWriter struct {
+	cmd       *baseCommand
+	operation OperationType
+}
+
+// BinEncoder is the low-allocation write path for PutBinsIter-style APIs.
 //
-// WriteBin must write only the value payload bytes for the bin selected by i.
-// EstimateBin must return the same bin name, particle type, and payload size
-// that WriteBin will emit.
-type BinValueIter interface {
-	Len() int
-	EstimateBin(i int) (name string, particleType int, valueSize int, err Error)
-	WriteBin(i int, cmd BufferEx) (int, Error)
+// WriteBins is called once to emit bins into the command buffer.
+type BinEncoder interface {
+	WriteBins(w BinWriter) Error
+}
+
+// BinSizeHint optionally provides an initial byte-capacity hint for BinEncoder
+// writes. The command buffer may still grow beyond this value if needed.
+type BinSizeHint interface {
+	InitialBufferSize() int
 }
 
 // BinHeaderReceiver optionally receives record metadata when using GetBins.

@@ -110,39 +110,101 @@ type mockObject struct {
 }
 
 type mockWriteIter struct {
-	id    int
-	name  string
-	score int64
+	id       int
+	name     string
+	score    int64
+	ratio32  float32
+	unsigned uint64
+	nullSet  bool
+	geo      string
+	hll      []byte
+	tags     mockStringMap
+	values   mockIntList
 }
 
-func (m *mockWriteIter) Len() int {
-	return 3
+func (m *mockWriteIter) InitialBufferSize() int {
+	tagsSize, _ := PackMap(nil, m.tags)
+	valuesSize, _ := PackList(nil, m.values)
+	return 10*int(_OPERATION_HEADER_SIZE) +
+		len("id") + len("name") + len("score") + len("ratio32") + len("unsigned") + len("none") + len("geo") + len("hll") + len("tags") + len("values") +
+		8 + len(m.name) + 8 + 4 + 8 + 0 + 3 + len(m.geo) + len(m.hll) + tagsSize + valuesSize
 }
 
-func (m *mockWriteIter) EstimateBin(i int) (string, int, int, Error) {
-	switch i {
-	case 0:
-		return "id", ParticleType.INTEGER, 8, nil
-	case 1:
-		return "name", ParticleType.STRING, len(m.name), nil
-	case 2:
-		return "score", ParticleType.INTEGER, 8, nil
-	default:
-		return "", 0, 0, ErrInvalidObjectType
+func (m *mockWriteIter) WriteBins(w BinWriter) Error {
+	if err := w.WriteInt("id", m.id); err != nil {
+		return err
 	}
+	if err := w.WriteString("name", m.name); err != nil {
+		return err
+	}
+	if err := w.WriteInt64("score", m.score); err != nil {
+		return err
+	}
+	if err := w.WriteFloat32("ratio32", m.ratio32); err != nil {
+		return err
+	}
+	if err := w.WriteUint64("unsigned", m.unsigned); err != nil {
+		return err
+	}
+	if m.nullSet {
+		if err := w.WriteNull("none"); err != nil {
+			return err
+		}
+	}
+	if err := w.WriteGeoJSON("geo", m.geo); err != nil {
+		return err
+	}
+	if err := w.WriteHLL("hll", m.hll); err != nil {
+		return err
+	}
+	if err := w.WriteMap("tags", m.tags); err != nil {
+		return err
+	}
+	return w.WriteList("values", m.values)
 }
 
-func (m *mockWriteIter) WriteBin(i int, cmd BufferEx) (int, Error) {
-	switch i {
-	case 0:
-		return cmd.WriteInt64(int64(m.id)), nil
-	case 1:
-		return cmd.WriteString(m.name)
-	case 2:
-		return cmd.WriteInt64(m.score), nil
-	default:
-		return 0, ErrInvalidObjectType
+type mockStringMap map[string]string
+
+func (m mockStringMap) PackMap(buf BufferEx) (int, error) {
+	size := 0
+	for key, value := range m {
+		n, err := PackString(buf, key)
+		size += n
+		if err != nil {
+			return size, err
+		}
+
+		n, err = PackString(buf, value)
+		size += n
+		if err != nil {
+			return size, err
+		}
 	}
+
+	return size, nil
+}
+
+func (m mockStringMap) Len() int {
+	return len(m)
+}
+
+type mockIntList []int
+
+func (l mockIntList) PackList(buf BufferEx) (int, error) {
+	size := 0
+	for _, value := range l {
+		n, err := PackInt64(buf, int64(value))
+		size += n
+		if err != nil {
+			return size, err
+		}
+	}
+
+	return size, nil
+}
+
+func (l mockIntList) Len() int {
+	return len(l)
 }
 
 func TestMockReadPathsMatch(t *testing.T) {
@@ -243,9 +305,27 @@ func TestMockWriteIterMatchesBins(t *testing.T) {
 		{Name: "id", Value: IntegerValue(7)},
 		{Name: "name", Value: StringValue("alpha")},
 		{Name: "score", Value: LongValue(99)},
+		{Name: "ratio32", Value: NewRawBlobValue(ParticleType.FLOAT, []byte{0x40, 0x60, 0x00, 0x00})},
+		{Name: "unsigned", Value: NewRawBlobValue(ParticleType.INTEGER, []byte{0, 0, 0, 0, 0, 0, 0, 42})},
+		{Name: "none", Value: NewNullValue()},
+		{Name: "geo", Value: NewGeoJSONValue(`{"type":"Point","coordinates":[1.0,2.0]}`)},
+		{Name: "hll", Value: NewHLLValue([]byte{1, 2, 3, 4})},
+		{Name: "tags", Value: NewMapperValue(mockStringMap{"env": "prod", "region": "eu"})},
+		{Name: "values", Value: NewListerValue(mockIntList{1, 3, 5})},
 	}
 
-	iter := mockWriteIter{id: 7, name: "alpha", score: 99}
+	iter := mockWriteIter{
+		id:       7,
+		name:     "alpha",
+		score:    99,
+		ratio32:  3.5,
+		unsigned: 42,
+		nullSet:  true,
+		geo:      `{"type":"Point","coordinates":[1.0,2.0]}`,
+		hll:      []byte{1, 2, 3, 4},
+		tags:     mockStringMap{"env": "prod", "region": "eu"},
+		values:   mockIntList{1, 3, 5},
+	}
 
 	cmdBins, err := newWriteCommand(nil, policy, key, bins, nil, nil, _WRITE)
 	if err != nil {

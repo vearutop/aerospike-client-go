@@ -16,6 +16,7 @@ package aerospike_test
 
 import (
 	as "github.com/aerospike/aerospike-client-go/v8"
+	ParticleType "github.com/aerospike/aerospike-client-go/v8/types/particle_type"
 
 	gg "github.com/onsi/ginkgo/v2"
 	gm "github.com/onsi/gomega"
@@ -30,14 +31,25 @@ func (t testBinIter) Len() int {
 	return 2
 }
 
-func (t testBinIter) Bin(i int) (string, as.Value) {
+func (t testBinIter) EstimateBin(i int) (string, int, int, as.Error) {
 	switch i {
 	case 0:
-		return "count", as.IntegerValue(t.count)
+		return "count", ParticleType.INTEGER, 8, nil
 	case 1:
-		return "name", as.StringValue(t.name)
+		return "name", ParticleType.STRING, len(t.name), nil
 	default:
-		panic("unreachable")
+		return "", 0, 0, as.ErrInvalidObjectType
+	}
+}
+
+func (t testBinIter) WriteBin(i int, cmd as.BufferEx) (int, as.Error) {
+	switch i {
+	case 0:
+		return cmd.WriteInt64(int64(t.count)), nil
+	case 1:
+		return cmd.WriteString(t.name)
+	default:
+		return 0, as.ErrInvalidObjectType
 	}
 }
 

@@ -27,27 +27,16 @@ const (
 // BinMap is used to define a map of bin names to values.
 type BinMap map[string]any
 
-// BinValueIter allows callers to provide record bins without creating a BinMap
-// or allocating Bin objects on the hot path.
-//
-// Returned Value objects should be concrete aerospike Value implementations
-// such as IntegerValue, StringValue, BytesValue, NewListerValue, or
-// NewMapperValue.
-type BinValueIter interface {
-	Len() int
-	Bin(i int) (name string, value Value)
-}
-
-// BinValueEncoderIter is an optional low-level fast path for PutBinsIter-style
-// APIs. It allows callers to expose bin metadata and write predefined value
-// types directly into the wire buffer without boxing them into Value
-// interfaces on each iteration.
+// BinValueIter is the low-allocation write path for PutBinsIter-style APIs.
+// It allows callers to expose bin metadata and write predefined value types
+// directly into the wire buffer without boxing them into Value interfaces on
+// each iteration.
 //
 // WriteBin must write only the value payload bytes for the bin selected by i.
 // EstimateBin must return the same bin name, particle type, and payload size
 // that WriteBin will emit.
-type BinValueEncoderIter interface {
-	BinValueIter
+type BinValueIter interface {
+	Len() int
 	EstimateBin(i int) (name string, particleType int, valueSize int, err Error)
 	WriteBin(i int, cmd BufferEx) (int, Error)
 }

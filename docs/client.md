@@ -432,8 +432,8 @@ Example:
 ### PutBinsIter(policy *WritePolicy, key *Key, bins BinValueIter) error
 
 Writes a record to the database cluster using a caller-provided bin iterator.
-This avoids `BinMap` allocation and can also avoid temporary `Bin` allocations
-when you expose values directly from your own structs or slices.
+This avoids `BinMap` allocation and temporary `Bin`/`Value` allocations when
+you expose values directly from your own structs or slices.
 
 ### GetBins(policy *BasePolicy, key *Key, receiver RawBinReceiver, bins ...string) error
 

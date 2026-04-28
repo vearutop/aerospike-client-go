@@ -119,19 +119,6 @@ func (m *mockWriteIter) Len() int {
 	return 3
 }
 
-func (m *mockWriteIter) Bin(i int) (string, Value) {
-	switch i {
-	case 0:
-		return "id", IntegerValue(m.id)
-	case 1:
-		return "name", StringValue(m.name)
-	case 2:
-		return "score", LongValue(m.score)
-	default:
-		panic("unreachable")
-	}
-}
-
 func (m *mockWriteIter) EstimateBin(i int) (string, int, int, Error) {
 	switch i {
 	case 0:
@@ -155,42 +142,6 @@ func (m *mockWriteIter) WriteBin(i int, cmd BufferEx) (int, Error) {
 		return cmd.WriteInt64(m.score), nil
 	default:
 		return 0, ErrInvalidObjectType
-	}
-}
-
-type mockPreboxedWriteIter struct {
-	names  [3]string
-	values [3]Value
-}
-
-func (m mockPreboxedWriteIter) Len() int {
-	return len(m.values)
-}
-
-func (m mockPreboxedWriteIter) Bin(i int) (string, Value) {
-	return m.names[i], m.values[i]
-}
-
-type mockBoxedWriteIter struct {
-	id    int
-	name  string
-	score int64
-}
-
-func (m mockBoxedWriteIter) Len() int {
-	return 3
-}
-
-func (m mockBoxedWriteIter) Bin(i int) (string, Value) {
-	switch i {
-	case 0:
-		return "id", IntegerValue(m.id)
-	case 1:
-		return "name", StringValue(m.name)
-	case 2:
-		return "score", LongValue(m.score)
-	default:
-		panic("unreachable")
 	}
 }
 

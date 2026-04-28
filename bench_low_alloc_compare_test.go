@@ -27,7 +27,6 @@ var (
 	benchmarkLowAllocObject   mockObject
 	benchmarkLowAllocCallback mockCallbackReceiver
 	benchmarkLowAllocErr      Error
-	benchmarkLowAllocPayload  []byte
 )
 
 func benchmarkMockObjects(size int) []mockObject {
@@ -96,8 +95,6 @@ func BenchmarkLowAllocWritePaths(b *testing.B) {
 		}
 	})
 
-	// BenchmarkLowAllocWritePaths/iter_fast-14     	 8057196	       150.6 ns/op	     208 B/op	       1 allocs/op
-	// BenchmarkLowAllocWritePaths/iter_fast-14     	 7180738	       171.8 ns/op	     240 B/op	       2 allocs/op
 	b.Run("iter_fast", func(b *testing.B) {
 		b.ReportAllocs()
 		dataBuffer := make([]byte, bufferSize)
@@ -109,27 +106,6 @@ func BenchmarkLowAllocWritePaths(b *testing.B) {
 			iter.score = obj.Score
 
 			cmd, err := newWriteCommand(nil, policy, key, nil, nil, &iter, _WRITE)
-			if err != nil {
-				b.Fatal(err)
-			}
-			cmd.baseCommand.dataBuffer = dataBuffer
-			if err := cmd.writeBuffer(&cmd); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-
-	b.Run("iter_boxed", func(b *testing.B) {
-		b.ReportAllocs()
-		dataBuffer := make([]byte, bufferSize)
-		iter := mockBoxedWriteIter{}
-		for i := 0; i < b.N; i++ {
-			obj := objects[i%len(objects)]
-			iter.id = obj.ID
-			iter.name = obj.Name
-			iter.score = obj.Score
-
-			cmd, err := newWriteCommand(nil, policy, key, nil, nil, iter, _WRITE)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -200,15 +176,6 @@ func BenchmarkLowAllocWritePathsSteadyState(b *testing.B) {
 		{Name: "score", Value: LongValue(99)},
 	}
 	iter := mockWriteIter{id: 7, name: "alpha", score: 99}
-	boxedIter := mockBoxedWriteIter{id: 7, name: "alpha", score: 99}
-	preboxedIter := mockPreboxedWriteIter{
-		names: [3]string{"id", "name", "score"},
-		values: [3]Value{
-			IntegerValue(7),
-			StringValue("alpha"),
-			LongValue(99),
-		},
-	}
 
 	b.Run("bins", func(b *testing.B) {
 		b.ReportAllocs()
@@ -245,36 +212,6 @@ func BenchmarkLowAllocWritePathsSteadyState(b *testing.B) {
 		dataBuffer := make([]byte, bufferSize)
 		for i := 0; i < b.N; i++ {
 			cmd, err := newWriteCommand(nil, policy, key, nil, nil, &iter, _WRITE)
-			if err != nil {
-				b.Fatal(err)
-			}
-			cmd.baseCommand.dataBuffer = dataBuffer
-			if err := cmd.writeBuffer(&cmd); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-
-	b.Run("iter_boxed", func(b *testing.B) {
-		b.ReportAllocs()
-		dataBuffer := make([]byte, bufferSize)
-		for i := 0; i < b.N; i++ {
-			cmd, err := newWriteCommand(nil, policy, key, nil, nil, boxedIter, _WRITE)
-			if err != nil {
-				b.Fatal(err)
-			}
-			cmd.baseCommand.dataBuffer = dataBuffer
-			if err := cmd.writeBuffer(&cmd); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-
-	b.Run("iter_preboxed", func(b *testing.B) {
-		b.ReportAllocs()
-		dataBuffer := make([]byte, bufferSize)
-		for i := 0; i < b.N; i++ {
-			cmd, err := newWriteCommand(nil, policy, key, nil, nil, preboxedIter, _WRITE)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -377,6 +314,4 @@ func BenchmarkLowAllocReadPaths(b *testing.B) {
 			benchmarkLowAllocCallback = cb
 		}
 	})
-
-	benchmarkLowAllocPayload = payload
 }

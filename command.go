@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"math"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8/logger"
@@ -791,19 +792,23 @@ func (w *BinWriter) WriteFloat64(name string, value float64) Error {
 
 // WriteFloat32 writes a float32 bin value.
 func (w *BinWriter) WriteFloat32(name string, value float32) Error {
-	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + 4); err != nil {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + 8); err != nil {
 		return err
 	}
-	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.FLOAT, 4, w.operation); err != nil {
+	// The server only stores 8-byte floats.
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.FLOAT, 8, w.operation); err != nil {
 		return err
 	}
-	w.cmd.WriteFloat32(value)
+	w.cmd.WriteFloat64(float64(value))
 	w.cmd.operationCount++
 	return nil
 }
 
 // WriteUint64 writes a uint64 bin value.
 func (w *BinWriter) WriteUint64(name string, value uint64) Error {
+	if value > math.MaxInt64 {
+		return newError(types.PARAMETER_ERROR, "uint64 value overflows server integer")
+	}
 	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + 8); err != nil {
 		return err
 	}

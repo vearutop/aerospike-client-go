@@ -28,6 +28,7 @@ type writeCommand struct {
 
 	bins      []*Bin
 	binMap    BinMap
+	binEnc    BinEncoder
 	operation OperationType
 }
 
@@ -37,6 +38,7 @@ func newWriteCommand(
 	key *Key,
 	bins []*Bin,
 	binMap BinMap,
+	binEnc BinEncoder,
 	operation OperationType,
 ) (writeCommand, Error) {
 	if cluster.utf8ValidationEnabled() {
@@ -58,6 +60,7 @@ func newWriteCommand(
 		baseWriteCommand: bwc,
 		bins:             bins,
 		binMap:           binMap,
+		binEnc:           binEnc,
 		operation:        operation,
 	}
 
@@ -65,7 +68,7 @@ func newWriteCommand(
 }
 
 func (cmd *writeCommand) writeBuffer(ifc command) Error {
-	return cmd.setWrite(cmd.policy, cmd.operation, cmd.key, cmd.bins, cmd.binMap)
+	return cmd.setWrite(cmd.policy, cmd.operation, cmd.key, cmd.bins, cmd.binMap, cmd.binEnc)
 }
 
 func (cmd *writeCommand) parseResult(ifc command, conn *Connection) Error {

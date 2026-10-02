@@ -446,7 +446,7 @@ func (clnt *Client) Put(policy *WritePolicy, key *Key, binMap BinMap) Error {
 		}
 	}
 
-	command, err := newWriteCommand(clnt.cluster, policy, key, nil, binMap, _WRITE)
+	command, err := newWriteCommand(clnt.cluster, policy, key, nil, binMap, nil, _WRITE)
 	if err != nil {
 		return err
 	}
@@ -468,7 +468,35 @@ func (clnt *Client) PutBins(policy *WritePolicy, key *Key, bins ...*Bin) Error {
 		}
 	}
 
-	command, err := newWriteCommand(clnt.cluster, policy, key, bins, nil, _WRITE)
+	command, err := newWriteCommand(clnt.cluster, policy, key, bins, nil, nil, _WRITE)
+	if err != nil {
+		return err
+	}
+
+	return command.Execute()
+}
+
+// PutEncodedBins writes record bin(s) to the server using a caller-provided bin
+// encoder.
+//
+// This method avoids BinMap allocation and can also avoid temporary Bin and
+// Value allocations when the caller exposes bins from its own data structures.
+// Record-level write semantics such as generation checks and expiration remain
+// controlled by WritePolicy.
+func (clnt *Client) PutEncodedBins(policy *WritePolicy, key *Key, bins BinEncoder) Error {
+	if bins == nil {
+		return newError(types.PARAMETER_ERROR, "bin encoder is nil")
+	}
+
+	policy = clnt.getUsableWritePolicy(policy)
+
+	if policy.Txn != nil {
+		if err := txnMonitor.addKey(clnt.cluster, policy, key); err != nil {
+			return err
+		}
+	}
+
+	command, err := newWriteCommand(clnt.cluster, policy, key, nil, nil, bins, _WRITE)
 	if err != nil {
 		return err
 	}
@@ -494,7 +522,7 @@ func (clnt *Client) Append(policy *WritePolicy, key *Key, binMap BinMap) Error {
 		}
 	}
 
-	command, err := newWriteCommand(clnt.cluster, policy, key, nil, binMap, _APPEND)
+	command, err := newWriteCommand(clnt.cluster, policy, key, nil, binMap, nil, _APPEND)
 	if err != nil {
 		return err
 	}
@@ -512,7 +540,29 @@ func (clnt *Client) AppendBins(policy *WritePolicy, key *Key, bins ...*Bin) Erro
 		}
 	}
 
-	command, err := newWriteCommand(clnt.cluster, policy, key, bins, nil, _APPEND)
+	command, err := newWriteCommand(clnt.cluster, policy, key, bins, nil, nil, _APPEND)
+	if err != nil {
+		return err
+	}
+
+	return command.Execute()
+}
+
+// AppendEncodedBins works the same as Append, but accepts a caller-provided bin encoder.
+func (clnt *Client) AppendEncodedBins(policy *WritePolicy, key *Key, bins BinEncoder) Error {
+	if bins == nil {
+		return newError(types.PARAMETER_ERROR, "bin encoder is nil")
+	}
+
+	policy = clnt.getUsableWritePolicy(policy)
+
+	if policy.Txn != nil {
+		if err := txnMonitor.addKey(clnt.cluster, policy, key); err != nil {
+			return err
+		}
+	}
+
+	command, err := newWriteCommand(clnt.cluster, policy, key, nil, nil, bins, _APPEND)
 	if err != nil {
 		return err
 	}
@@ -534,7 +584,7 @@ func (clnt *Client) Prepend(policy *WritePolicy, key *Key, binMap BinMap) Error 
 		}
 	}
 
-	command, err := newWriteCommand(clnt.cluster, policy, key, nil, binMap, _PREPEND)
+	command, err := newWriteCommand(clnt.cluster, policy, key, nil, binMap, nil, _PREPEND)
 	if err != nil {
 		return err
 	}
@@ -552,7 +602,29 @@ func (clnt *Client) PrependBins(policy *WritePolicy, key *Key, bins ...*Bin) Err
 		}
 	}
 
-	command, err := newWriteCommand(clnt.cluster, policy, key, bins, nil, _PREPEND)
+	command, err := newWriteCommand(clnt.cluster, policy, key, bins, nil, nil, _PREPEND)
+	if err != nil {
+		return err
+	}
+
+	return command.Execute()
+}
+
+// PrependEncodedBins works the same as Prepend, but accepts a caller-provided bin encoder.
+func (clnt *Client) PrependEncodedBins(policy *WritePolicy, key *Key, bins BinEncoder) Error {
+	if bins == nil {
+		return newError(types.PARAMETER_ERROR, "bin encoder is nil")
+	}
+
+	policy = clnt.getUsableWritePolicy(policy)
+
+	if policy.Txn != nil {
+		if err := txnMonitor.addKey(clnt.cluster, policy, key); err != nil {
+			return err
+		}
+	}
+
+	command, err := newWriteCommand(clnt.cluster, policy, key, nil, nil, bins, _PREPEND)
 	if err != nil {
 		return err
 	}
@@ -578,7 +650,7 @@ func (clnt *Client) Add(policy *WritePolicy, key *Key, binMap BinMap) Error {
 		}
 	}
 
-	command, err := newWriteCommand(clnt.cluster, policy, key, nil, binMap, _ADD)
+	command, err := newWriteCommand(clnt.cluster, policy, key, nil, binMap, nil, _ADD)
 	if err != nil {
 		return err
 	}
@@ -596,7 +668,29 @@ func (clnt *Client) AddBins(policy *WritePolicy, key *Key, bins ...*Bin) Error {
 		}
 	}
 
-	command, err := newWriteCommand(clnt.cluster, policy, key, bins, nil, _ADD)
+	command, err := newWriteCommand(clnt.cluster, policy, key, bins, nil, nil, _ADD)
+	if err != nil {
+		return err
+	}
+
+	return command.Execute()
+}
+
+// AddEncodedBins works the same as Add, but accepts a caller-provided bin encoder.
+func (clnt *Client) AddEncodedBins(policy *WritePolicy, key *Key, bins BinEncoder) Error {
+	if bins == nil {
+		return newError(types.PARAMETER_ERROR, "bin encoder is nil")
+	}
+
+	policy = clnt.getUsableWritePolicy(policy)
+
+	if policy.Txn != nil {
+		if err := txnMonitor.addKey(clnt.cluster, policy, key); err != nil {
+			return err
+		}
+	}
+
+	command, err := newWriteCommand(clnt.cluster, policy, key, nil, nil, bins, _ADD)
 	if err != nil {
 		return err
 	}
@@ -741,6 +835,33 @@ func (clnt *Client) Get(policy *BasePolicy, key *Key, binNames ...string) (*Reco
 		return nil, err
 	}
 	return command.GetRecord(), nil
+}
+
+// GetDecodedBins reads selected bins for the specified key and streams them into the
+// provided receiver without constructing a Record or BinMap.
+//
+// Bin names and raw value bytes alias the command buffer and are only valid for
+// the duration of each callback.
+func (clnt *Client) GetDecodedBins(policy *BasePolicy, key *Key, receiver BinDecoder, binNames ...string) Error {
+	if receiver == nil {
+		return newError(types.PARAMETER_ERROR, "bin receiver is nil")
+	}
+
+	policy = clnt.getUsablePolicy(policy)
+
+	if policy.Txn != nil {
+		if err := policy.Txn.prepareRead(key.namespace); err != nil {
+			return err
+		}
+	}
+
+	command, err := newReadCommand(clnt.cluster, policy, key, binNames)
+	if err != nil {
+		return err
+	}
+
+	command.binReceiver = receiver
+	return command.Execute()
 }
 
 // GetHeader reads a record generation and expiration only for specified key.

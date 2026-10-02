@@ -122,6 +122,11 @@ We are bending all efforts to improve the client's performance. In our reference
 
 To read about performance variables, please refer to [`docs/performance.md`](docs/performance.md)
 
+For allocation-sensitive code paths, prefer:
+- `PutBins` with caller-managed reusable `[]*Bin` when you already have bins prepared
+- `PutEncodedBins` with a custom `BinEncoder` when you want to write directly from your own structs without temporary `Bin` or `Value` objects
+- `GetDecodedBins` with a `BinDecoder` when you want to avoid building `Record.Bins`
+
 <a name="Tests"></a>
 ## Tests
 
@@ -178,4 +183,3 @@ The Aerospike Go Client is made available under the terms of the Apache License,
 
 Individual files may be made available under their own specific license,
 all compatible with Apache License, Version 2. Please see individual files for details.
-

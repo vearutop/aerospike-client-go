@@ -143,3 +143,47 @@ func (host *Host) Equals(other *Host) bool {
 func NewExpression(e any) *Expression {
 	return newExpression(e)
 }
+
+// ExecuteSingleBatchOperate calls batchCommandOperate.executeSingle with
+// the given records and offsets, bypassing the normal Execute condition.
+func ExecuteSingleBatchOperate(client *Client, policy *BatchPolicy, records []BatchRecordIfc, offsets []int) Error {
+	batch := &batchNode{offsets: offsets}
+	cmd := newBatchCommandOperate(client, batch, policy, records)
+	return cmd.executeSingle(client)
+}
+
+// ExecuteSingleBatchIndexGet calls batchIndexCommandGet.executeSingle with
+// the given records and offsets, bypassing the normal Execute condition.
+func ExecuteSingleBatchIndexGet(client *Client, policy *BatchPolicy, records []*BatchRead, offsets []int) Error {
+	batch := &batchNode{offsets: offsets}
+	cmd := newBatchIndexCommandGet(client, batch, policy, records, false)
+	return cmd.executeSingle(client)
+}
+
+// ExecuteSingleBatchDelete calls batchCommandDelete.executeSingle with
+// the given keys, records, and offsets, bypassing the normal Execute condition.
+func ExecuteSingleBatchDelete(client *Client, policy *BatchPolicy, deletePolicy *BatchDeletePolicy, keys []*Key, records []*BatchRecord, offsets []int) Error {
+	batch := &batchNode{offsets: offsets}
+	cmd := newBatchCommandDelete(client, batch, policy, deletePolicy, keys, records, nil)
+	return cmd.executeSingle(client)
+}
+
+// ExecuteSingleBatchUDF calls batchCommandUDF.executeSingle with
+// the given keys, records, and offsets, bypassing the normal Execute condition.
+func ExecuteSingleBatchUDF(client *Client, policy *BatchPolicy, udfPolicy *BatchUDFPolicy, keys []*Key, packageName, functionName string, args []Value, records []*BatchRecord, offsets []int) Error {
+	batch := &batchNode{offsets: offsets}
+	cmd := newBatchCommandUDF(client, batch, policy, udfPolicy, keys, packageName, functionName, args, records, nil)
+	return cmd.executeSingle(client)
+}
+
+// RollRecords returns the batch records of the last Roll, so tests can assert
+// the roll commands ran rather than inferring it from the commit status.
+func (txr *TxnRoll) RollRecords() []*BatchRecord {
+	return txr.rollRecords
+}
+
+// AlreadyCommitted reports whether the last mark-roll-forward was answered
+// with MRT_COMMITTED.
+func (txr *TxnRoll) AlreadyCommitted() bool {
+	return txr.alreadyCommitted
+}

@@ -94,6 +94,7 @@ func (cmd *batchCommandDelete) parseRecordResults(ifc command, receiveSize int) 
 		if err != nil {
 			return false, err
 		}
+		cmd.applyErrorDetail(cmd.records[batchIndex])
 
 		// The only valid server return codes are "ok" and "not found" and "filtered out".
 		// If other return codes are received, then abort the batch.
@@ -105,7 +106,7 @@ func (cmd *batchCommandDelete) parseRecordResults(ifc command, receiveSize int) 
 			}
 
 			if resultCode != types.KEY_NOT_FOUND_ERROR && resultCode != types.FILTERED_OUT {
-				return false, newCustomNodeError(cmd.node, resultCode)
+				return false, cmd.capturedServerError(resultCode)
 			}
 		}
 
@@ -186,11 +187,16 @@ func (cmd *batchCommandDelete) commandType() commandType {
 
 func (cmd *batchCommandDelete) executeSingle(client *Client) Error {
 	policy := cmd.batchDeletePolicy.toWritePolicy(cmd.policy, client.dynConfig)
-	for i, key := range cmd.keys {
+	// Honor sendKey from BOTH the parent BatchPolicy and the per-record policy.
+	// toWritePolicy carries only the per-record value, so OR in the parent's sendKey here.
+	policy.SendKey = cmd.policy.SendKey || (cmd.batchDeletePolicy != nil && cmd.batchDeletePolicy.SendKey)
+
+	for _, offset := range cmd.batch.offsets {
+		key := cmd.keys[offset]
 		res, err := client.Operate(policy, key, DeleteOp())
-		cmd.records[i].setRecord(res)
+		cmd.records[offset].setRecord(res)
 		if err != nil {
-			cmd.records[i].setRawError(err)
+			cmd.records[offset].setRawError(err)
 
 			// Key not found is NOT an error for batch requests
 			if err.resultCode() == types.KEY_NOT_FOUND_ERROR {
@@ -202,17 +208,41 @@ func (cmd *batchCommandDelete) executeSingle(client *Client) Error {
 				continue
 			}
 
-			return err
+			if shouldAbortBatchCommand(err) {
+				return err
+			}
+			continue
 		}
 	}
 	return nil
 }
 
 func (cmd *batchCommandDelete) Execute() Error {
-	if len(cmd.keys) == 1 {
+	if len(cmd.batch.offsets) == 1 {
 		return cmd.executeSingle(cmd.client)
 	}
-	return cmd.execute(cmd)
+	err := cmd.execute(cmd)
+	if err != nil {
+		cmd.setInDoubt(cmd)
+	}
+	return err
+}
+
+// inDoubt marks every record on this write subcommand that was left without a
+// server response (NO_RESPONSE) as in-doubt. On a timeout the delete may have
+// been applied on the server even though the client never received the result.
+func (cmd *batchCommandDelete) inDoubt() {
+	if !cmd.attr.hasWrite {
+		return
+	}
+
+	for _, offset := range cmd.batch.offsets {
+		record := cmd.records[offset]
+
+		if record.ResultCode == types.NO_RESPONSE {
+			record.InDoubt = true
+		}
+	}
 }
 
 func (cmd *batchCommandDelete) generateBatchNodes(cluster *Cluster) ([]*batchNode, Error) {

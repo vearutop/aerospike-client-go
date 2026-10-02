@@ -95,6 +95,9 @@ const (
 	_INFO4_MRT_ROLL_BACK = (1 << 2)
 	// Must be able to lock record in transaction.
 	_INFO4_MRT_ON_LOCKING_ONLY = (1 << 4)
+	// info4 bits 5-6: error detail verbosity level.
+	_INFO4_ERROR_VERBOSITY_SHIFT = 5
+	_INFO4_ERROR_VERBOSITY_MASK  = 0x60
 
 	// Interpret SC_READ bits in info3.
 	//
@@ -254,13 +257,14 @@ type baseCommand struct {
 // Multi-record Transactions
 //--------------------------------------------------
 
-func canRepeat(policy *BatchPolicy, key *Key, record, prev BatchRecordIfc, ver, verPrev *uint64) bool {
+func canRepeat(key *Key, record, prev BatchRecordIfc, ver, verPrev *uint64) bool {
 	// Avoid relatively expensive full equality checks for performance reasons.
 	// Use reference equality only in hope that common namespaces/bin names are set from
 	// fixed variables.  It's fine if equality not determined correctly because it just
 	// results in more space used. The batch will still be correct.
 	// Same goes for ver reference equality check.
-	return !policy.SendKey && verPrev == ver && prev != nil && prev.key().namespace == key.namespace &&
+	// sendKey is gated by the caller (!sendKey && canRepeat) so reads keep repeat in a write batch.
+	return verPrev == ver && prev != nil && prev.key().namespace == key.namespace &&
 		prev.key().setName == key.setName && record == prev
 }
 
@@ -681,6 +685,15 @@ func (cmd *baseCommand) sizeTxnBatch(txn *Txn, ver *uint64, hasWrite bool) {
 		if hasWrite && txn.deadline != 0 {
 			cmd.dataOffset += int(4 + _FIELD_HEADER_SIZE)
 		}
+	}
+}
+
+// sizeBatchErrorVerbosity accounts for the per-row info4 byte that carries the
+// error-detail verbosity opt-in on non-transaction batches. On transactions the
+// info4 byte is already sized by sizeTxnBatch, so this adds nothing.
+func (cmd *baseCommand) sizeBatchErrorVerbosity(txn *Txn, errBits int) {
+	if txn == nil && errBits != 0 {
+		cmd.dataOffset++
 	}
 }
 
@@ -1340,6 +1353,7 @@ func (cmd *baseCommand) setBatchOperateIfcOffsets(
 ) (*batchAttr, Error) {
 	max := offsets.size()
 	txn := policy.Txn
+	errBits := batchErrorVerbosityBits(policy)
 	var versions []*uint64
 
 	// Estimate buffer size
@@ -1384,9 +1398,10 @@ func (cmd *baseCommand) setBatchOperateIfcOffsets(
 
 		cmd.dataOffset += len(key.digest) + 4
 
+		sendKey := record.resolveSendKey(&policy.BasePolicy, client)
 		// Try reference equality in hope that namespace/set for all keys is set from fixed variables.
-		// if !policy.SendKey && prev != nil && prev.key().namespace == key.namespace && (prev.key().setName == key.setName) && record.equals(prev) {
-		if canRepeat(policy, key, record, prev, ver, verPrev) {
+		// if !sendKey && prev != nil && prev.key().namespace == key.namespace && (prev.key().setName == key.setName) && record.equals(prev) {
+		if !sendKey && canRepeat(key, record, prev, ver, verPrev) {
 			// Can set repeat previous namespace/bin names to save space.
 			cmd.dataOffset++
 		} else {
@@ -1395,7 +1410,8 @@ func (cmd *baseCommand) setBatchOperateIfcOffsets(
 			cmd.dataOffset += len(key.namespace) + int(_FIELD_HEADER_SIZE)
 			cmd.dataOffset += len(key.setName) + int(_FIELD_HEADER_SIZE)
 			cmd.sizeTxnBatch(txn, ver, record.BatchRec().hasWrite)
-			if sz, err := record.size(&policy.BasePolicy); err != nil {
+			cmd.sizeBatchErrorVerbosity(txn, errBits)
+			if sz, err := record.size(sendKey); err != nil {
 				return nil, err
 			} else {
 				cmd.dataOffset += sz
@@ -1428,6 +1444,7 @@ func (cmd *baseCommand) setBatchOperateIfcOffsets(
 	cmd.WriteByte(cmd.getBatchFlags(policy))
 
 	attr := &batchAttr{}
+	attr.errorDetailBits = errBits
 	prev = nil
 	verPrev = nil
 	for i := 0; i < max; i++ {
@@ -1445,10 +1462,11 @@ func (cmd *baseCommand) setBatchOperateIfcOffsets(
 		if _, err := cmd.Write(key.digest[:]); err != nil {
 			return nil, newCommonError(err)
 		}
+		sendKey := record.resolveSendKey(&policy.BasePolicy, client)
 
 		// Try reference equality in hope that namespace/set for all keys is set from fixed variables.
-		// if !policy.SendKey && prev != nil && prev.key().namespace == key.namespace && prev.key().setName == key.setName && record.equals(prev) {
-		if canRepeat(policy, key, record, prev, ver, verPrev) {
+		// if !sendKey  && prev != nil && prev.key().namespace == key.namespace && prev.key().setName == key.setName && record.equals(prev) {
+		if !sendKey && canRepeat(key, record, prev, ver, verPrev) {
 			// Can set repeat previous namespace/bin names to save space.
 			cmd.WriteByte(_BATCH_MSG_REPEAT) // repeat
 		} else {
@@ -1474,8 +1492,9 @@ func (cmd *baseCommand) setBatchOperateIfcOffsets(
 
 			case _BRT_BATCH_WRITE:
 				bw := record.(*BatchWrite)
-
-				attr.setBatchWrite(client.getUsableBatchWritePolicy(bw.Policy))
+				usableWp := client.getUsableBatchWritePolicy(bw.Policy)
+				attr.setBatchWrite(usableWp)
+				attr.sendKey = sendKey // resolved union (parent honored)
 				attr.adjustWrite(bw.Ops)
 				if err := cmd.writeBatchOperations(key, txn, ver, bw.Ops, attr, attr.filterExp); err != nil {
 					return nil, err
@@ -1483,8 +1502,9 @@ func (cmd *baseCommand) setBatchOperateIfcOffsets(
 
 			case _BRT_BATCH_UDF:
 				bu := record.(*BatchUDF)
-
-				attr.setBatchUDF(client.getUsableBatchUDFPolicy(bu.Policy))
+				usableUp := client.getUsableBatchUDFPolicy(bu.Policy)
+				attr.setBatchUDF(usableUp)
+				attr.sendKey = sendKey
 				cmd.writeBatchWrite(key, txn, ver, attr, attr.filterExp, 3, 0)
 				cmd.writeFieldString(bu.PackageName, UDF_PACKAGE_NAME)
 				cmd.writeFieldString(bu.FunctionName, UDF_FUNCTION)
@@ -1492,8 +1512,9 @@ func (cmd *baseCommand) setBatchOperateIfcOffsets(
 
 			case _BRT_BATCH_DELETE:
 				bd := record.(*BatchDelete)
-
-				attr.setBatchDelete(client.getUsableBatchDeletePolicy(bd.Policy))
+				usableDp := client.getUsableBatchDeletePolicy(bd.Policy)
+				attr.setBatchDelete(usableDp)
+				attr.sendKey = sendKey
 				cmd.writeBatchWrite(key, txn, ver, attr, attr.filterExp, 0, 0)
 			}
 			prev = record
@@ -1527,6 +1548,7 @@ func (cmd *baseCommand) setBatchOperateReadOffsets(
 ) (*batchAttr, Error) {
 	max := offsets.size()
 	txn := policy.Txn
+	errBits := batchErrorVerbosityBits(policy)
 	var versions []*uint64
 
 	// Estimate buffer size
@@ -1572,8 +1594,9 @@ func (cmd *baseCommand) setBatchOperateReadOffsets(
 		cmd.dataOffset += len(key.digest) + 4
 
 		// Try reference equality in hope that namespace/set for all keys is set from fixed variables.
-		// if !policy.SendKey && prev != nil && prev.key().namespace == key.namespace && (prev.key().setName == key.setName) && record.equals(prev) {
-		if canRepeat(policy, key, record, prev, ver, verPrev) {
+		// if prev != nil && prev.key().namespace == key.namespace && (prev.key().setName == key.setName) && record.equals(prev) {
+		// Read-only path: reads never send the key, so repeat is not gated on sendKey.
+		if canRepeat(key, record, prev, ver, verPrev) {
 			// Can set repeat previous namespace/bin names to save space.
 			cmd.dataOffset++
 		} else {
@@ -1582,7 +1605,8 @@ func (cmd *baseCommand) setBatchOperateReadOffsets(
 			cmd.dataOffset += len(key.namespace) + int(_FIELD_HEADER_SIZE)
 			cmd.dataOffset += len(key.setName) + int(_FIELD_HEADER_SIZE)
 			cmd.sizeTxnBatch(txn, ver, record.BatchRec().hasWrite)
-			if sz, err := record.size(&policy.BasePolicy); err != nil {
+			cmd.sizeBatchErrorVerbosity(txn, errBits)
+			if sz, err := record.size(false); err != nil {
 				return nil, err
 			} else {
 				cmd.dataOffset += sz
@@ -1615,6 +1639,7 @@ func (cmd *baseCommand) setBatchOperateReadOffsets(
 	cmd.WriteByte(cmd.getBatchFlags(policy))
 
 	attr := &batchAttr{}
+	attr.errorDetailBits = errBits
 	prev = nil
 	verPrev = nil
 	for i := 0; i < max; i++ {
@@ -1634,8 +1659,9 @@ func (cmd *baseCommand) setBatchOperateReadOffsets(
 		}
 
 		// Try reference equality in hope that namespace/set for all keys is set from fixed variables.
-		// if !policy.SendKey && prev != nil && prev.key().namespace == key.namespace && prev.key().setName == key.setName && record.equals(prev) {
-		if canRepeat(policy, key, record, prev, ver, verPrev) {
+		// if prev != nil && prev.key().namespace == key.namespace && prev.key().setName == key.setName && record.equals(prev) {
+		// Read records never store the user key — repeat is not gated on sendKey.
+		if canRepeat(key, record, prev, ver, verPrev) {
 			// Can set repeat previous namespace/bin names to save space.
 			cmd.WriteByte(_BATCH_MSG_REPEAT) // repeat
 		} else {
@@ -1690,6 +1716,8 @@ func (cmd *baseCommand) setBatchOperateOffsets(
 ) Error {
 	max := offsets.size()
 	txn := policy.Txn
+	errBits := batchErrorVerbosityBits(policy)
+	attr.errorDetailBits = errBits
 	var versions []*uint64
 
 	// Estimate buffer size
@@ -1747,6 +1775,7 @@ func (cmd *baseCommand) setBatchOperateOffsets(
 			cmd.dataOffset += len(key.namespace) + int(_FIELD_HEADER_SIZE)
 			cmd.dataOffset += len(key.setName) + int(_FIELD_HEADER_SIZE)
 			cmd.sizeTxnBatch(txn, ver, attr.hasWrite)
+			cmd.sizeBatchErrorVerbosity(txn, errBits)
 
 			if attr.sendKey && key.hasValueToSend() {
 				if sz, err := key.userKey.EstimateSize(); err != nil {
@@ -1880,6 +1909,8 @@ func (cmd *baseCommand) setBatchUDFOffsets(
 ) Error {
 	max := offsets.size()
 	txn := policy.Txn
+	errBits := batchErrorVerbosityBits(policy)
+	attr.errorDetailBits = errBits
 	var versions []*uint64
 
 	// Estimate buffer size
@@ -1933,6 +1964,7 @@ func (cmd *baseCommand) setBatchUDFOffsets(
 			cmd.dataOffset += len(key.namespace) + int(_FIELD_HEADER_SIZE)
 			cmd.dataOffset += len(key.setName) + int(_FIELD_HEADER_SIZE)
 			cmd.sizeTxnBatch(txn, ver, attr.hasWrite)
+			cmd.sizeBatchErrorVerbosity(txn, errBits)
 
 			if attr.sendKey && key.hasValueToSend() {
 				if sz, err := key.userKey.EstimateSize(); err != nil {
@@ -2080,6 +2112,28 @@ func (cmd *baseCommand) writeBatchOperations(
 	return nil
 }
 
+// errorVerbosityBits folds an error-detail verbosity into the info4 bits (5-6)
+// the server reads to decide whether to attach an error detail (field 45).
+//
+// Clamps before shifting: the mask alone lets a negative value through as
+// maximum verbosity ((-1 << 5) & 0x60 == 0x60 == 3).
+func errorVerbosityBits(verbosity int) int {
+	if verbosity < 0 {
+		verbosity = 0
+	} else if verbosity > 3 {
+		verbosity = 3
+	}
+	return (verbosity << _INFO4_ERROR_VERBOSITY_SHIFT) & _INFO4_ERROR_VERBOSITY_MASK
+}
+
+// batchErrorVerbosityBits returns the error-detail verbosity folded into the
+// info4 bits (5-6) the server reads per batch row to decide whether to attach a
+// per-row error detail (field 45). It is batch-wide, taken from the parent
+// BatchPolicy per the error-details design.
+func batchErrorVerbosityBits(policy *BatchPolicy) int {
+	return errorVerbosityBits(policy.ErrorDetailVerbosity)
+}
+
 func (cmd *baseCommand) writeBatchRead(
 	key *Key,
 	txn *Txn,
@@ -2088,20 +2142,27 @@ func (cmd *baseCommand) writeBatchRead(
 	filter *Expression,
 	opCount int,
 ) {
+	// info4 carries the transaction attributes and/or the error-detail verbosity
+	// bits. Emit the info4 byte whenever either is present so the server can read
+	// the per-row opt-in even for non-transaction batches.
+	info4 := byte(attr.txnAttr | attr.errorDetailBits)
+	hasInfo4 := txn != nil || info4 != 0
+
+	flags := byte(_BATCH_MSG_INFO | _BATCH_MSG_TTL)
+	if hasInfo4 {
+		flags |= _BATCH_MSG_INFO4
+	}
+	cmd.WriteByte(flags)
+	cmd.WriteByte(byte(attr.readAttr))
+	cmd.WriteByte(byte(attr.writeAttr))
+	cmd.WriteByte(byte(attr.infoAttr))
+	if hasInfo4 {
+		cmd.WriteByte(info4)
+	}
+	cmd.WriteUint32(attr.expiration)
 	if txn != nil {
-		cmd.WriteByte(_BATCH_MSG_INFO | _BATCH_MSG_INFO4 | _BATCH_MSG_TTL)
-		cmd.WriteByte(byte(attr.readAttr))
-		cmd.WriteByte(byte(attr.writeAttr))
-		cmd.WriteByte(byte(attr.infoAttr))
-		cmd.WriteByte(byte(attr.txnAttr))
-		cmd.WriteUint32(attr.expiration)
 		cmd.writeBatchFieldsTxn(key, txn, ver, attr, filter, 0, opCount)
 	} else {
-		cmd.WriteByte(_BATCH_MSG_INFO | _BATCH_MSG_TTL)
-		cmd.WriteByte(byte(attr.readAttr))
-		cmd.WriteByte(byte(attr.writeAttr))
-		cmd.WriteByte(byte(attr.infoAttr))
-		cmd.WriteUint32(attr.expiration)
 		cmd.writeBatchFieldsWithFilter(key, filter, 0, opCount)
 	}
 }
@@ -2115,22 +2176,25 @@ func (cmd *baseCommand) writeBatchWrite(
 	fieldCount,
 	opCount int,
 ) {
+	info4 := byte(attr.txnAttr | attr.errorDetailBits)
+	hasInfo4 := txn != nil || info4 != 0
+
+	flags := byte(_BATCH_MSG_INFO | _BATCH_MSG_GEN | _BATCH_MSG_TTL)
+	if hasInfo4 {
+		flags |= _BATCH_MSG_INFO4
+	}
+	cmd.WriteByte(flags)
+	cmd.WriteByte(byte(attr.readAttr))
+	cmd.WriteByte(byte(attr.writeAttr))
+	cmd.WriteByte(byte(attr.infoAttr))
+	if hasInfo4 {
+		cmd.WriteByte(info4)
+	}
+	cmd.WriteUint16(uint16(attr.generation)) // Note the reduced size of the gen field
+	cmd.WriteUint32(attr.expiration)
 	if txn != nil {
-		cmd.WriteByte(_BATCH_MSG_INFO | _BATCH_MSG_INFO4 | _BATCH_MSG_GEN | _BATCH_MSG_TTL)
-		cmd.WriteByte(byte(attr.readAttr))
-		cmd.WriteByte(byte(attr.writeAttr))
-		cmd.WriteByte(byte(attr.infoAttr))
-		cmd.WriteByte(byte(attr.txnAttr))
-		cmd.WriteUint16(uint16(attr.generation)) // Note the reduced size of the gen field
-		cmd.WriteUint32(attr.expiration)
 		cmd.writeBatchFieldsTxn(key, txn, ver, attr, filter, fieldCount, opCount)
 	} else {
-		cmd.WriteByte(_BATCH_MSG_INFO | _BATCH_MSG_GEN | _BATCH_MSG_TTL)
-		cmd.WriteByte(byte(attr.readAttr))
-		cmd.WriteByte(byte(attr.writeAttr))
-		cmd.WriteByte(byte(attr.infoAttr))
-		cmd.WriteUint16(uint16(attr.generation))
-		cmd.WriteUint32(attr.expiration)
 		cmd.writeBatchFieldsReg(key, attr, filter, fieldCount, opCount)
 	}
 }
@@ -3247,6 +3311,8 @@ func (cmd *baseCommand) writeHeaderWrite(policy *WritePolicy, writeAttr, fieldCo
 		txnAttr |= _INFO4_MRT_ON_LOCKING_ONLY
 	}
 
+	txnAttr |= errorVerbosityBits(policy.ErrorDetailVerbosity)
+
 	// if (policy.Xdr) {
 	// 	readAttr |= _INFO1_XDR;
 	// }
@@ -3315,6 +3381,8 @@ func (cmd *baseCommand) writeHeaderReadWrite(policy *WritePolicy, args *operateA
 		txnAttr |= _INFO4_MRT_ON_LOCKING_ONLY
 	}
 
+	txnAttr |= errorVerbosityBits(policy.ErrorDetailVerbosity)
+
 	// if (policy.xdr) {
 	// 	readAttr |= _INFO1_XDR;
 	// }
@@ -3378,8 +3446,9 @@ func (cmd *baseCommand) writeHeaderRead(policy *BasePolicy, readAttr, writeAttr,
 	cmd.dataBuffer[9] = byte(readAttr)
 	cmd.dataBuffer[10] = byte(writeAttr)
 	cmd.dataBuffer[11] = byte(infoAttr)
+	cmd.dataBuffer[12] = byte(errorVerbosityBits(policy.ErrorDetailVerbosity))
 
-	for i := 12; i < 18; i++ {
+	for i := 13; i < 18; i++ {
 		cmd.dataBuffer[i] = 0
 	}
 	cmd.dataOffset = 18
@@ -3413,8 +3482,9 @@ func (cmd *baseCommand) writeHeaderReadHeader(policy *BasePolicy, readAttr, fiel
 	cmd.dataBuffer[9] = byte(readAttr)
 	cmd.dataBuffer[10] = byte(0)
 	cmd.dataBuffer[11] = byte(infoAttr)
+	cmd.dataBuffer[12] = byte(errorVerbosityBits(policy.ErrorDetailVerbosity))
 
-	for i := 12; i < 18; i++ {
+	for i := 13; i < 18; i++ {
 		cmd.dataBuffer[i] = 0
 	}
 
@@ -3498,7 +3568,7 @@ func (cmd *baseCommand) writeKey(key *Key) Error {
 func (cmd *baseCommand) writeOperationForBin(bin *Bin, operation OperationType) Error {
 	nameLength, valid := cmd.writeAndValidateBinName(bin.Name)
 	if !valid {
-		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long or empty, it must be between 1 and %d bytes.", bin.Name, maxBinNameLength))
+		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long, it cannot be longer than %d bytes.", bin.Name, maxBinNameLength))
 	}
 
 	valueLength, err := bin.Value.EstimateSize()
@@ -3519,7 +3589,7 @@ func (cmd *baseCommand) writeOperationForBin(bin *Bin, operation OperationType) 
 func (cmd *baseCommand) writeOperationForBinNameAndValue(name string, val any, operation OperationType) Error {
 	nameLength, valid := cmd.writeAndValidateBinName(name)
 	if !valid {
-		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long or empty, it must be between 1 and %d bytes.", name, maxBinNameLength))
+		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long, it cannot be longer than %d bytes.", name, maxBinNameLength))
 	}
 
 	v := NewValue(val)
@@ -3583,11 +3653,11 @@ func (cmd *baseCommand) writeOperationForOperation(operation *Operation) Error {
 		}
 	case _CDT_READ, _CDT_MODIFY:
 		if !valid {
-			return newError(types.PARAMETER_ERROR, fmt.Sprintf("binName cannot be empty or exceed %d characters", maxBinNameLength))
+			return newError(types.PARAMETER_ERROR, fmt.Sprintf("binName cannot exceed %d characters", maxBinNameLength))
 		}
 	default:
 		if !valid {
-			return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long or empty, it must be between 1 and %d bytes.", operation.binName, maxBinNameLength))
+			return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long, it cannot be longer than %d bytes.", operation.binName, maxBinNameLength))
 		}
 	}
 
@@ -3625,7 +3695,7 @@ func (cmd *baseCommand) writeOperationForOperation(operation *Operation) Error {
 func (cmd *baseCommand) writeOperationForBinName(name string, operation OperationType) Error {
 	nameLength, valid := cmd.writeAndValidateBinName(name)
 	if !valid {
-		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long or empty, it must be between 1 and %d bytes.", name, maxBinNameLength))
+		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long, it cannot be longer than %d bytes.", name, maxBinNameLength))
 	}
 
 	cmd.WriteInt32(int32(nameLength + 4))
@@ -4301,21 +4371,24 @@ func applyTransactionMetrics(node *Node, tt commandType, tb time.Time) {
 }
 
 func applyTransactionErrorMetrics(node *Node) {
-	if node != nil {
-		node.stats.TransactionErrorCount.GetAndIncrement()
+	if node == nil || !node.cluster.metricsEnabled.Load() {
+		return
 	}
+	node.stats.TransactionErrorCount.GetAndIncrement()
 }
 
 func applyTransactionRetryMetrics(node *Node) {
-	if node != nil {
-		node.stats.TransactionRetryCount.GetAndIncrement()
+	if node == nil || !node.cluster.metricsEnabled.Load() {
+		return
 	}
+	node.stats.TransactionRetryCount.GetAndIncrement()
 }
 
 func applyConnectionRecoveredMetrics(node *Node) {
-	if node != nil {
-		node.stats.ConnectionsRecovered.GetAndIncrement()
+	if node == nil || !node.cluster.metricsEnabled.Load() {
+		return
 	}
+	node.stats.ConnectionsRecovered.GetAndIncrement()
 }
 
 func applyMetrics(tt commandType, metrics *nodeStats, s time.Time) {
@@ -4439,6 +4512,11 @@ func (cmd *baseCommand) applyDetailedMetricsDataSizeAndLatencyOnWrite(ifc comman
 }
 
 func (cmd *baseCommand) writeAndValidateBinName(binName string) (int, bool) {
+	// Empty bin names are valid: the server accepts them (notably for
+	// single-bin namespaces). Only the maximum length is enforced here, to
+	// catch oversized names client-side before the wire round-trip. Java
+	// performs no client-side validation; Go keeps the length cap because
+	// the wire encodes the name length in a single byte slot.
 	nameLength := copy(cmd.dataBuffer[(cmd.dataOffset+int(_OPERATION_HEADER_SIZE)):], binName)
-	return nameLength, binName != "" && nameLength <= maxBinNameLength
+	return nameLength, nameLength <= maxBinNameLength
 }

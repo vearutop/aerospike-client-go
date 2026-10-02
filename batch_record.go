@@ -1,4 +1,4 @@
-// Copyright 2014-2022 Aerospike, Inc.
+// Copyright 2014-2026 Aerospike, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -47,7 +47,8 @@ type BatchRecordIfc interface {
 	chainError(err Error)
 	String() string
 	getType() batchRecordType
-	size(parentPolicy *BasePolicy) (int, Error)
+	size(sendKey bool) (int, Error)
+	resolveSendKey(parentPolicy *BasePolicy, client *Client) bool
 	equals(BatchRecordIfc) bool
 }
 
@@ -71,6 +72,19 @@ type BatchRecord struct {
 	// occurred for this record. This may be the case when a client error occurs (like timeout)
 	// after the command was sent to the server.
 	InDoubt bool
+
+	// ServerMessage is the formatted server-side error detail (message and/or
+	// subcode) for this row, populated when the batch opted into
+	// ErrorDetailVerbosity > 0 and the server attached field 45. Empty otherwise.
+	ServerMessage string
+
+	// SubCode is the numeric server-supplied subcode for this row (see SubCode*
+	// constants in the types package). Defaults to [types.SubCodeNone] (0).
+	SubCode types.SubCode
+
+	// ExpTrace is the server-supplied expression build trace for this row, sent
+	// only at verbosity 3 on expression build-failure paths. nil when absent.
+	ExpTrace *ExpressionTrace
 
 	// Does this command contain a write operation. For internal use only.
 	hasWrite bool
@@ -122,6 +136,21 @@ func (br *BatchRecord) prepare() {
 	br.ResultCode = types.NO_RESPONSE
 	br.Err = nil
 	br.InDoubt = false
+	br.ServerMessage = ""
+	br.SubCode = types.SubCodeNone
+	br.ExpTrace = nil
+}
+
+// Set the server-supplied error detail (field 45) for this record. For internal use only.
+func (br *BatchRecord) setErrorDetail(message string, subcode types.SubCode, expTrace *ExpressionTrace) {
+	br.ServerMessage = message
+	br.SubCode = subcode
+	br.ExpTrace = expTrace
+}
+
+// hasServerErrorDetail reports whether a server-side error detail was captured for this record.
+func (br *BatchRecord) hasServerErrorDetail() bool {
+	return br.ServerMessage != "" || br.SubCode != types.SubCodeNone || br.ExpTrace != nil
 }
 
 // Set record result. For internal use only.
@@ -136,20 +165,38 @@ func (br *BatchRecord) setRawError(err Error) {
 	br.ResultCode = err.resultCode()
 	br.InDoubt = err.IsInDoubt()
 	br.Err = err
+
+	// Surface any server-supplied error detail (field 45) carried by the error onto
+	// this record's structured fields, mirroring the multi-record path's
+	// applyErrorDetail. The single-key batch fast-path (executeSingle) routes row
+	// failures here via the single-record command API, whose Error already carries
+	// the decoded detail; without this copy br.ServerMessage / br.SubCode /
+	// br.ExpTrace would stay empty on a one-record batch even with verbosity opted in.
+	if ae, ok := err.(*AerospikeError); ok {
+		br.ServerMessage = ae.ServerMessage
+		br.SubCode = ae.SubCode
+		br.ExpTrace = ae.ExpTrace
+	}
 }
 
 // Set error result. For internal use only.
 func (br *BatchRecord) setError(node *Node, resultCode types.ResultCode, inDoubt bool) {
 	br.ResultCode = resultCode
 	br.InDoubt = inDoubt
-	br.Err = newError(br.ResultCode).setNode(node).markInDoubtIf(inDoubt)
+	if br.hasServerErrorDetail() {
+		br.Err = newServerError(resultCode, br.ServerMessage, br.SubCode, br.ExpTrace).setNode(node).markInDoubtIf(inDoubt)
+	} else {
+		br.Err = newServerError(resultCode, "", types.SubCodeNone, nil).setNode(node).markInDoubtIf(inDoubt)
+	}
 }
 
 // Set error result. For internal use only.
 func (br *BatchRecord) setErrorWithMsg(node *Node, resultCode types.ResultCode, msg string, inDoubt bool) {
 	br.ResultCode = resultCode
 	br.InDoubt = inDoubt
-	br.Err = newError(br.ResultCode, msg).setNode(node).markInDoubtIf(inDoubt)
+	// msg is a caller-supplied message (e.g. a UDF FAILURE bin). Fold in any
+	// captured server subcode / expression trace for this row alongside it.
+	br.Err = newServerError(resultCode, msg, br.SubCode, br.ExpTrace).setNode(node).markInDoubtIf(inDoubt)
 }
 
 // String implements the Stringer interface.
@@ -167,6 +214,11 @@ func (br *BatchRecord) getType() batchRecordType {
 }
 
 // Return wire protocol size. For internal use only.
-func (br *BatchRecord) size(parentPolicy *BasePolicy) (int, Error) {
+func (br *BatchRecord) size(sendKey bool) (int, Error) {
 	panic(unreachable)
+}
+
+// resolveSendKey: reads (and any type not overriding this) never send the key. For internal use only.
+func (br *BatchRecord) resolveSendKey(parentPolicy *BasePolicy, client *Client) bool {
+	return false
 }

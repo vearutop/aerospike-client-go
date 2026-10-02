@@ -56,7 +56,7 @@ type ClientPolicy struct {
 	// on every tend (usually 1 second).
 	//
 	// Servers 8.1+ have deprecated proto-fd-idle-ms. When proto-fd-idle-ms is ultimately removed,
-    // the server will stop automatically reaping based on socket idle timeouts.
+	// the server will stop automatically reaping based on socket idle timeouts.
 	//
 	// Default: 0 seconds
 	IdleTimeout time.Duration //= 0 seconds
@@ -122,12 +122,22 @@ type ClientPolicy struct {
 	// Minimum possible interval is 10 Milliseconds.
 	TendInterval time.Duration //= 1 second
 
-	// A IP translation table is used in cases where different clients
-	// use different server IP addresses. This may be necessary when
-	// using clients from both inside and outside a local area
-	// network. Default is no translation.
-	// The key is the IP address returned from friend info requests to other servers.
-	// The value is the real IP address used to connect to the server.
+	// IpMap translates server-advertised addresses into client-reachable ones. It is
+	// used when client and server sit on different networks (e.g. an on-prem client
+	// reaching a cloud cluster through a load balancer), so the internal address a node
+	// advertises during discovery can be rewritten into an address the client can
+	// actually connect to. Default is nil (no translation).
+	//
+	// The key is the host (no port) the server advertises. The value is the address the
+	// client should use instead: either "host" (port preserved, matching the Java and C
+	// clients) or "host:port" (host and port both replaced — needed when several nodes
+	// sit behind one load-balancer hostname and are distinguished only by port). A
+	// missing key leaves the address unchanged. It is applied on both the
+	// seed/service-address path (node_validator.go) and the peers path (peers_parser.go).
+	//
+	// NOTE: IpMap/NLB fork change. Stock declares this identical field but never
+	// applies it (dead since the 2021 addFriends removal); this fork re-wires it and
+	// additionally accepts "host:port" values.
 	IpMap map[string]string
 
 	// UseServicesAlternate determines if the client should use "services-alternate" instead of "services"
@@ -189,6 +199,26 @@ type ClientPolicy struct {
 
 	// Determianes the interval for checking for configuration changes using configProvider.
 	ConfigInterval time.Duration // = 5 second
+
+	// ValidateUTF8 enables a pre-write check that every string value sent in a
+	// write operation contains only valid UTF-8 bytes. Default: false.
+	//
+	// Go's string type is a sequence of bytes and is not type-enforced to be
+	// valid UTF-8. The Aerospike wire protocol and server-side string
+	// operations (introduced in server 8.2.0) assume string particles are
+	// valid UTF-8: invalid bytes cause silently wrong results in some ops
+	// (e.g. StrLen, StrSubstr, StrInsert, StrPadStart) and PARAMETER_ERROR
+	// in others (e.g. StrUpper, StrFind, StrRegexReplace).
+	//
+	// When enabled, writes containing invalid UTF-8 fail fast with
+	// PARAMETER_ERROR before being sent to the server. The check is O(n)
+	// per string and short-circuits on ASCII via unicode/utf8.ValidString.
+	//
+	// Default is false for backward compatibility — applications may today
+	// rely on round-tripping arbitrary bytes through string bins. New
+	// applications and any caller that touches string operations should
+	// set this to true.
+	ValidateUTF8 bool //= false
 }
 
 // NewClientPolicy generates a new ClientPolicy with default values.

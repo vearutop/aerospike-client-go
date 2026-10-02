@@ -16,10 +16,13 @@ package aerospike_test
 
 import (
 	"fmt"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 
+	as "github.com/aerospike/aerospike-client-go/v8"
 	dynconfig "github.com/aerospike/aerospike-client-go/v8/config"
+	registry "github.com/aerospike/aerospike-client-go/v8/config/registry"
 	gg "github.com/onsi/ginkgo/v2"
 	gm "github.com/onsi/gomega"
 )
@@ -117,4 +120,125 @@ var _ = gg.Describe("YAML Unmarshal for Enum Types", func() {
 		gg.Entry("quoted invalid", `"badval"`, nil, true),
 		gg.Entry("number", "123", nil, true),
 	)
+})
+
+const (
+	sendKeyTrueConfigScheme  = "sendkeytrue://"
+	sendKeyFalseConfigScheme = "sendkeyfalse://"
+	testDynConfigDSN         = "dummy" // URL path segment; ignored by in-memory test providers
+)
+
+// sendKeyConfigProvider is an in-memory ConfigProvider (same shape as fakeConfigProvider in client_test.go).
+type sendKeyConfigProvider struct {
+	config *dynconfig.Config
+}
+
+func (provider *sendKeyConfigProvider) LoadConfig(dsn string) *dynconfig.Config {
+	return provider.config
+}
+
+func newSendKeyConfigProvider(sendKey bool) *sendKeyConfigProvider {
+	sendKeyValue := sendKey
+	configVersion := "1.0.0"
+	return &sendKeyConfigProvider{
+		config: &dynconfig.Config{
+			Version: &configVersion,
+			Dynamic: &dynconfig.DynamicConfig{
+				BatchWrite:  &dynconfig.BatchWrite{SendKey: &sendKeyValue},
+				BatchUdf:    &dynconfig.BatchUdf{SendKey: &sendKeyValue},
+				BatchDelete: &dynconfig.BatchDelete{SendKey: &sendKeyValue},
+			},
+		},
+	}
+}
+
+// Register fixture schemes ONCE at package init (registry.Register panics on duplicate scheme).
+var _ = func() bool {
+	registry.Register(sendKeyTrueConfigScheme, newSendKeyConfigProvider(true))
+	registry.Register(sendKeyFalseConfigScheme, newSendKeyConfigProvider(false))
+	return true
+}()
+
+var _ = gg.Describe("CLIENT-4898 dynamic config sendKey override", func() {
+	namespaceName := *namespace
+	setName := "ck4898_dyn"
+
+	// Dynamic config only enables sendKey, never disables an API-set value,
+	// and never mutates the caller's policy.
+	gg.It("dynamic config can only enable sendKey, never disable it, and never mutates the caller policy", func() {
+		expectBatchOperateOK := func(err error) {
+			gm.Expect(err == nil).To(gm.BeTrue(), "batch write failed: %v", err)
+		}
+
+		// Dynconfig is wired at client construction, so each scheme needs its own client.
+		newDynConfigClient := func(configURL string) (*as.Client, func()) {
+			originalConfigURL := as.AEROSPIKE_CLIENT_CONFIG_URL
+			as.AEROSPIKE_CLIENT_CONFIG_URL = configURL
+			dynClient, err := as.NewClientWithPolicyAndHost(clientPolicy, dbHosts...)
+			gm.Expect(err).ToNot(gm.HaveOccurred())
+			_, err = dynClient.WarmUp(0)
+			gm.Expect(err).ToNot(gm.HaveOccurred())
+			return dynClient, func() {
+				dynClient.Close()
+				as.AEROSPIKE_CLIENT_CONFIG_URL = originalConfigURL
+			}
+		}
+
+		// Did the server store the user key for this digest? A scan is the only correct probe —
+		// the client otherwise supplies the key itself.
+		isUserKeyStoredOnServer := func(key *as.Key) bool {
+			scanResults, err := client.ScanAll(as.NewScanPolicy(), namespaceName, setName)
+			gm.Expect(err).ToNot(gm.HaveOccurred())
+			defer scanResults.Close()
+			for result := range scanResults.Results() {
+				if result.Record != nil && result.Record.Key != nil &&
+					string(result.Record.Key.Digest()) == string(key.Digest()) {
+					return result.Record.Key.Value() != nil
+				}
+			}
+			return false
+		}
+
+		// Run a 3-record batch write with the given per-record sendKey on a dynconfig client.
+		runDynConfigBatchWrite := func(dynClient *as.Client, apiSendKey bool, keyPrefix string) []*as.Key {
+			batchWritePolicy := as.NewBatchWritePolicy()
+			batchWritePolicy.SendKey = apiSendKey
+			var batchRecords []as.BatchRecordIfc
+			var keys []*as.Key
+			for i := 0; i < 3; i++ {
+				key, _ := as.NewKey(namespaceName, setName, keyPrefix+strconv.Itoa(i))
+				keys = append(keys, key)
+				batchRecords = append(batchRecords, as.NewBatchWrite(batchWritePolicy, key, as.PutOp(as.NewBin("v", i))))
+			}
+			expectBatchOperateOK(dynClient.BatchOperate(newSuiteBatchPolicy(), batchRecords))
+			return keys
+		}
+
+		sendKeyFalseConfigURL := sendKeyFalseConfigScheme + testDynConfigDSN
+		sendKeyTrueConfigURL := sendKeyTrueConfigScheme + testDynConfigDSN
+
+		sendKeyFalseClient, cleanupSendKeyFalseClient := newDynConfigClient(sendKeyFalseConfigURL)
+		defer cleanupSendKeyFalseClient()
+		sendKeyTrueClient, cleanupSendKeyTrueClient := newDynConfigClient(sendKeyTrueConfigURL)
+		defer cleanupSendKeyTrueClient()
+
+		// API sendKey=true + dynamic send_key=false → must STAY stored (dynamic cannot disable).
+		for _, key := range runDynConfigBatchWrite(sendKeyFalseClient, true, "dyn-sticky-") {
+			gm.Expect(isUserKeyStoredOnServer(key)).To(gm.BeTrue(), "dynamic send_key=false must not disable an API-set sendKey=true")
+		}
+
+		// API sendKey=false + dynamic send_key=true → must become stored (dynamic enables).
+		for _, key := range runDynConfigBatchWrite(sendKeyTrueClient, false, "dyn-enable-") {
+			gm.Expect(isUserKeyStoredOnServer(key)).To(gm.BeTrue(), "dynamic send_key=true must enable sendKey")
+		}
+
+		// The caller's policy object must never be mutated by dynamic config.
+		batchWritePolicy := as.NewBatchWritePolicy()
+		batchWritePolicy.SendKey = false
+		key, _ := as.NewKey(namespaceName, setName, "dyn-nomutate")
+		batchRecords := []as.BatchRecordIfc{as.NewBatchWrite(batchWritePolicy, key, as.PutOp(as.NewBin("v", 1)))}
+		expectBatchOperateOK(sendKeyTrueClient.BatchOperate(newSuiteBatchPolicy(), batchRecords))
+		gm.Expect(batchWritePolicy.SendKey).To(gm.BeFalse(), "dynamic config must apply to a copy, not the caller's policy")
+		gm.Expect(isUserKeyStoredOnServer(key)).To(gm.BeTrue())
+	})
 })

@@ -25,6 +25,10 @@ var _ command = &txnMarkRollForwardCommand{}
 
 type txnMarkRollForwardCommand struct {
 	baseWriteCommand
+
+	// alreadyCommitted is set when the server answered with MRT_COMMITTED,
+	// which is a success: a previous attempt already marked the roll-forward.
+	alreadyCommitted bool
 }
 
 func newTxnMarkRollForwardCommand(
@@ -61,6 +65,7 @@ func (cmd *txnMarkRollForwardCommand) parseResult(ifc command, conn *Connection)
 	}
 
 	if resultCode == 0 || resultCode == types.MRT_COMMITTED {
+		cmd.alreadyCommitted = resultCode == types.MRT_COMMITTED
 		return nil
 	}
 

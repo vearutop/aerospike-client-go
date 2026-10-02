@@ -23,6 +23,11 @@ type TxnRoll struct {
 	txn           *Txn
 	verifyRecords []*BatchRecord
 	rollRecords   []*BatchRecord
+
+	// alreadyCommitted carries the MRT_COMMITTED answer from the
+	// mark-roll-forward command, which is a success the caller still needs
+	// to see reported as CommitStatusAlreadyCommitted.
+	alreadyCommitted bool
 }
 
 func NewTxnRoll(client *Client, txn *Txn) *TxnRoll {
@@ -73,17 +78,20 @@ func (txr *TxnRoll) Commit(rollPolicy *BatchPolicy) (CommitStatus, Error) {
 				txr.txn.SetState(TxnStateAborted)
 			} else if txr.txn.GetInDoubt() {
 				aec.markInDoubt(true)
+				txr.txn.markCommitFailed()
 			} else if err.IsInDoubt() {
 				aec.markInDoubt(true)
 				txr.txn.SetInDoubt(true)
+				txr.txn.markCommitFailed()
 			}
-			return CommitStatusRollForwardAbandoned, aec
+			return CommitStatusMarkRollForwardAbandoned, aec
 		}
 	}
 
 	txr.txn.SetState(TxnStateCommitted)
 	txr.txn.SetInDoubt(false)
 
+	// If roll fails, the server will eventually roll forward.
 	if err := txr.Roll(rollPolicy, _INFO4_MRT_ROLL_FORWARD); err != nil {
 		return CommitStatusRollForwardAbandoned, err
 	}
@@ -94,6 +102,11 @@ func (txr *TxnRoll) Commit(rollPolicy *BatchPolicy) (CommitStatus, Error) {
 			return CommitStatusCloseAbandoned, err
 		}
 	}
+
+	if txr.alreadyCommitted {
+		return CommitStatusAlreadyCommitted, nil
+	}
+
 	return CommitStatusOK, nil
 }
 
@@ -170,7 +183,13 @@ func (txr *TxnRoll) MarkRollForward(writePolicy *WritePolicy, txnKey *Key) Error
 	if err != nil {
 		return err
 	}
-	return cmd.execute(&cmd)
+
+	if err := cmd.execute(&cmd); err != nil {
+		return err
+	}
+
+	txr.alreadyCommitted = cmd.alreadyCommitted
+	return nil
 }
 
 func (txr *TxnRoll) Roll(rollPolicy *BatchPolicy, txnAttr int) Error {
@@ -239,4 +258,3 @@ func (txr *TxnRoll) Close(writePolicy *WritePolicy, txnKey *Key) Error {
 
 	return nil
 }
-

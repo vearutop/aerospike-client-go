@@ -1055,6 +1055,8 @@ func (clnt *Client) BatchDelete(policy *BatchPolicy, deletePolicy *BatchDeletePo
 
 	attr := &batchAttr{}
 	attr.setBatchDelete(deletePolicy)
+	// Union the parent BatchPolicy sendKey — setBatchDelete only reads the per-record policy.
+	attr.sendKey = attr.sendKey || policy.SendKey
 
 	// same array can be used without synchronization;
 	// when a key exists, the corresponding index will be set to record
@@ -1122,6 +1124,8 @@ func (clnt *Client) BatchExecute(policy *BatchPolicy, udfPolicy *BatchUDFPolicy,
 
 	attr := &batchAttr{}
 	attr.setBatchUDF(udfPolicy)
+	// Union the parent BatchPolicy sendKey — setBatchUDF only reads the per-record policy.
+	attr.sendKey = attr.sendKey || policy.SendKey
 
 	// same array can be used without synchronization;
 	// when a key exists, the corresponding index will be set to record
@@ -1730,6 +1734,8 @@ func (clnt *Client) Commit(txn *Txn) (CommitStatus, Error) {
 		}
 		return tr.Commit(&clnt.getUsableTxnRollPolicy(nil).BatchPolicy)
 	case TxnStateVerified:
+		fallthrough
+	case TxnStateCommitFailed:
 		return tr.Commit(&clnt.getUsableTxnRollPolicy(nil).BatchPolicy)
 	case TxnStateCommitted:
 		return CommitStatusAlreadyCommitted, nil
@@ -1739,6 +1745,9 @@ func (clnt *Client) Commit(txn *Txn) (CommitStatus, Error) {
 }
 
 // Abort and rollback the given multi-record transaction.
+//
+// Abort is not allowed after an in-doubt mark-roll-forward failure
+// the server may still roll the transaction forward.
 //
 // Requires server version 8.0+
 func (clnt *Client) Abort(txn *Txn) (AbortStatus, Error) {
@@ -1750,6 +1759,8 @@ func (clnt *Client) Abort(txn *Txn) (AbortStatus, Error) {
 		fallthrough
 	case TxnStateVerified:
 		return tr.Abort(&clnt.getUsableTxnRollPolicy(nil).BatchPolicy)
+	case TxnStateCommitFailed:
+		return AbortStatusCommitFailed, newError(types.TXN_FAILED, "Transaction commit failed. Abort is not allowed.")
 	case TxnStateCommitted:
 		return AbortStatusAlreadyCommitted, newError(types.TXN_ALREADY_COMMITTED, "Transaction already committed")
 	case TxnStateAborted:

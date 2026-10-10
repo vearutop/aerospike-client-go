@@ -147,7 +147,7 @@ func errToAerospikeErr(conn *Connection, err error) (aerr Error) {
 // A minimum timeout of 2 seconds will always be applied.
 // If the connection is not established in the specified timeout,
 // an error will be returned
-func newConnection(address string, timeout time.Duration) (*Connection, Error) {
+func newConnection(address string, timeout time.Duration, dial func(network, address string, timeout time.Duration) (net.Conn, error)) (*Connection, Error) {
 	newConn := &Connection{dataBuffer: buffPool.Get(DefaultBufferSize)}
 	newConn.buffHist = histogram.NewLog2(32)
 	newConn.bufferAdjustDeadline = time.Now().Add(_BUFF_ADJUST_INTERVAL)
@@ -160,7 +160,10 @@ func newConnection(address string, timeout time.Duration) (*Connection, Error) {
 		timeout = 5 * time.Second
 	}
 
-	conn, err := net.DialTimeout("tcp", address, timeout)
+	if dial == nil {
+		dial = net.DialTimeout
+	}
+	conn, err := dial("tcp", address, timeout)
 	if err != nil {
 		logger.Logger.Debug("Connection to address `%s` failed to establish with error: %s", address, err.Error())
 		return nil, errToAerospikeErr(nil, err)
@@ -183,7 +186,7 @@ func newConnection(address string, timeout time.Duration) (*Connection, Error) {
 // an error will be returned
 func NewConnection(policy *ClientPolicy, host *Host) (*Connection, Error) {
 	address := net.JoinHostPort(host.Name, strconv.Itoa(host.Port))
-	conn, err := newConnection(address, policy.Timeout)
+	conn, err := newConnection(address, policy.Timeout, policy.Dial)
 	if err != nil {
 		return nil, err
 	}

@@ -16,6 +16,7 @@ package aerospike
 
 import (
 	"crypto/tls"
+	"net"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8/logger"
@@ -184,6 +185,11 @@ type ClientPolicy struct {
 	// For better performance, we suggest preferring the server-side ciphers by
 	// setting PreferServerCipherSuites = true.
 	TlsConfig *tls.Config //= nil
+
+	// Dial, when set, opens the TCP connections to the nodes in place of net.DialTimeout,
+	// so that the caller can wrap the net.Conn, e.g. to count the bytes it carries.
+	// With TlsConfig set, the wrapped connection is the one under TLS.
+	Dial func(network, address string, timeout time.Duration) (net.Conn, error) //= nil
 
 	// IgnoreOtherSubnetAliases helps to ignore aliases that are outside main subnet
 	IgnoreOtherSubnetAliases bool //= false

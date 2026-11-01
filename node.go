@@ -751,11 +751,12 @@ func (nd *Node) usingTendConn(timeout time.Duration, f func(conn *Connection) Er
 
 		// if the tend connection is invalid, establish a new connection first
 		if *conn == nil || !(*conn).IsConnected() {
-			if nd.connectionCount.Get() == 0 {
-				// if there are no connections in the pool, create a new connection synchronously.
-				// this will make sure the initial tend will get a connection without multiple retries.
-				*conn, err = nd.newTendConnection()
-			} else {
+			// The tend connection is dialed synchronously: it fails as soon as the node does not accept it. Waiting for the pool
+			// instead (GetConnection polls it for the whole timeout) never ends before the timeout for a node that is down, and
+			// the tend goroutine, which also refreshes the other nodes and the partition map, waits with it.
+			*conn, err = nd.newTendConnection()
+			if err != nil && errors.Is(err, ErrTooManyConnectionsForNode) && nd.connectionCount.Get() > 0 {
+				// The node has all the connections that the policy allows: take one of the pool.
 				*conn, err = nd.GetConnection(timeout)
 			}
 

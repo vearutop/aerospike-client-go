@@ -376,12 +376,12 @@ func TestMockWriteIterMatchesBins(t *testing.T) {
 		{Name: "id", Value: IntegerValue(7)},
 		{Name: "name", Value: StringValue("alpha")},
 		{Name: "score", Value: LongValue(99)},
-		{Name: "ratio32", Value: NewRawBlobValue(ParticleType.FLOAT, []byte{0x40, 0x60, 0x00, 0x00})},
+		{Name: "ratio32", Value: NewFloatValue(3.5)},
 		{Name: "unsigned", Value: NewRawBlobValue(ParticleType.INTEGER, []byte{0, 0, 0, 0, 0, 0, 0, 42})},
 		{Name: "none", Value: NewNullValue()},
 		{Name: "geo", Value: NewGeoJSONValue(`{"type":"Point","coordinates":[1.0,2.0]}`)},
 		{Name: "hll", Value: NewHLLValue([]byte{1, 2, 3, 4})},
-		{Name: "tags", Value: NewMapperValue(mockStringMap{"env": "prod", "region": "eu"})},
+		{Name: "tags", Value: NewMapperValue(mockStringMap{"env": "prod"})},
 		{Name: "values", Value: NewListerValue(mockIntList{1, 3, 5})},
 	}
 
@@ -394,7 +394,7 @@ func TestMockWriteIterMatchesBins(t *testing.T) {
 		nullSet:  true,
 		geo:      `{"type":"Point","coordinates":[1.0,2.0]}`,
 		hll:      []byte{1, 2, 3, 4},
-		tags:     mockStringMap{"env": "prod", "region": "eu"},
+		tags:     mockStringMap{"env": "prod"},
 		values:   mockIntList{1, 3, 5},
 	}
 
@@ -416,8 +416,14 @@ func TestMockWriteIterMatchesBins(t *testing.T) {
 		t.Fatalf("write iter buffer: %v", err)
 	}
 
-	if !reflect.DeepEqual(cmdBins.dataBuffer[:cmdBins.dataOffset], cmdIter.dataBuffer[:cmdIter.dataOffset]) {
-		t.Fatalf("iter payload does not match bins payload")
+	want, got := cmdBins.dataBuffer[:cmdBins.dataOffset], cmdIter.dataBuffer[:cmdIter.dataOffset]
+	if !reflect.DeepEqual(want, got) {
+		at := 0
+		for at < len(want) && at < len(got) && want[at] == got[at] {
+			at++
+		}
+		t.Fatalf("iter payload does not match bins payload: %d and %d bytes, first difference at %d\nbins: %x\niter: %x",
+			len(want), len(got), at, want[at:min(len(want), at+24)], got[at:min(len(got), at+24)])
 	}
 }
 

@@ -85,6 +85,7 @@ func NewWriteCommand(
 		key,
 		bins,
 		binMap,
+		nil,
 		_WRITE)
 }
 

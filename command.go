@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"math"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8/logger"
@@ -249,6 +250,8 @@ type baseCommand struct {
 	commandWasSent     bool
 
 	receiveSize int64
+
+	operationCount int
 }
 
 //--------------------------------------------------
@@ -713,9 +716,197 @@ func (cmd *baseCommand) writeTxn(txn *Txn, sendDeadline bool) {
 // Normal commands
 //-------------------------------------------
 
-// Writes the command for write operations
-func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, key *Key, bins []*Bin, binMap BinMap) Error {
+// WriteInt writes an integer bin value.
+func (w *BinWriter) WriteInt(name string, value int) Error {
+	return w.WriteInt64(name, int64(value))
+}
+
+// WriteInt64 writes an int64 bin value.
+func (w *BinWriter) WriteInt64(name string, value int64) Error {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + 8); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.INTEGER, 8, w.operation); err != nil {
+		return err
+	}
+	w.cmd.WriteInt64(value)
+	w.cmd.operationCount++
+	return nil
+}
+
+// WriteString writes a string bin value.
+func (w *BinWriter) WriteString(name string, value string) Error {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + len(value)); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.STRING, len(value), w.operation); err != nil {
+		return err
+	}
+	_, err := w.cmd.WriteString(value)
+	if err == nil {
+		w.cmd.operationCount++
+	}
+	return err
+}
+
+// WriteBytes writes a blob bin value.
+func (w *BinWriter) WriteBytes(name string, value []byte) Error {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + len(value)); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.BLOB, len(value), w.operation); err != nil {
+		return err
+	}
+	_, err := w.cmd.Write(value)
+	if err == nil {
+		w.cmd.operationCount++
+	}
+	return err
+}
+
+// WriteBool writes a bool bin value.
+func (w *BinWriter) WriteBool(name string, value bool) Error {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + 1); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.BOOL, 1, w.operation); err != nil {
+		return err
+	}
+	w.cmd.WriteBool(value)
+	w.cmd.operationCount++
+	return nil
+}
+
+// WriteFloat64 writes a float64 bin value.
+func (w *BinWriter) WriteFloat64(name string, value float64) Error {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + 8); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.FLOAT, 8, w.operation); err != nil {
+		return err
+	}
+	w.cmd.WriteFloat64(value)
+	w.cmd.operationCount++
+	return nil
+}
+
+// WriteFloat32 writes a float32 bin value.
+func (w *BinWriter) WriteFloat32(name string, value float32) Error {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + 8); err != nil {
+		return err
+	}
+	// The server only stores 8-byte floats.
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.FLOAT, 8, w.operation); err != nil {
+		return err
+	}
+	w.cmd.WriteFloat64(float64(value))
+	w.cmd.operationCount++
+	return nil
+}
+
+// WriteUint64 writes a uint64 bin value.
+func (w *BinWriter) WriteUint64(name string, value uint64) Error {
+	if value > math.MaxInt64 {
+		return newError(types.PARAMETER_ERROR, "uint64 value overflows server integer")
+	}
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + 8); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.INTEGER, 8, w.operation); err != nil {
+		return err
+	}
+	w.cmd.WriteUint64(value)
+	w.cmd.operationCount++
+	return nil
+}
+
+// WriteNull writes a null bin value.
+func (w *BinWriter) WriteNull(name string) Error {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name)); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.NULL, 0, w.operation); err != nil {
+		return err
+	}
+	w.cmd.operationCount++
+	return nil
+}
+
+// WriteList writes a list bin value using a caller-provided list packer.
+func (w *BinWriter) WriteList(name string, value ListIter) Error {
+	valueLength, err := PackList(nil, value)
+	if err != nil {
+		return err
+	}
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + valueLength); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.LIST, valueLength, w.operation); err != nil {
+		return err
+	}
+	if _, err := PackList(w.cmd, value); err != nil {
+		return err
+	}
+	w.cmd.operationCount++
+	return nil
+}
+
+// WriteGeoJSON writes a GeoJSON bin value.
+func (w *BinWriter) WriteGeoJSON(name string, value string) Error {
+	valueLength := 3 + len(value)
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + valueLength); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.GEOJSON, valueLength, w.operation); err != nil {
+		return err
+	}
+	w.cmd.WriteByte(0)
+	w.cmd.WriteByte(0)
+	w.cmd.WriteByte(0)
+	_, err := w.cmd.WriteString(value)
+	if err == nil {
+		w.cmd.operationCount++
+	}
+	return err
+}
+
+// WriteHLL writes a HyperLogLog bin value.
+func (w *BinWriter) WriteHLL(name string, value []byte) Error {
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + len(value)); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.HLL, len(value), w.operation); err != nil {
+		return err
+	}
+	_, err := w.cmd.Write(value)
+	if err == nil {
+		w.cmd.operationCount++
+	}
+	return err
+}
+
+// WriteMap writes a map bin value using a caller-provided map packer.
+func (w *BinWriter) WriteMap(name string, value MapIter) Error {
+	valueLength, err := PackMap(nil, value)
+	if err != nil {
+		return err
+	}
+	if err := w.cmd.ensureWriteCapacity(int(_OPERATION_HEADER_SIZE) + len(name) + valueLength); err != nil {
+		return err
+	}
+	if err := w.cmd.writeOperationForBinNameAndParticleType(name, ParticleType.MAP, valueLength, w.operation); err != nil {
+		return err
+	}
+	if _, err := PackMap(w.cmd, value); err != nil {
+		return err
+	}
+	w.cmd.operationCount++
+	return nil
+}
+
+func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, key *Key, bins []*Bin, binMap BinMap, binEncoder BinEncoder) Error {
 	cmd.begin()
+	cmd.operationCount = 0
 	fieldCount, err := cmd.estimateKeySize(policy.GetBasePolicy(), key, true)
 	if err != nil {
 		return err
@@ -732,13 +923,13 @@ func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, k
 		}
 	}
 
-	if binMap == nil {
+	if binMap == nil && binEncoder == nil {
 		for i := range bins {
 			if err := cmd.estimateOperationSizeForBin(bins[i]); err != nil {
 				return err
 			}
 		}
-	} else {
+	} else if binMap != nil {
 		for name, value := range binMap {
 			if err := cmd.estimateOperationSizeForBinNameAndValue(name, value); err != nil {
 				return err
@@ -746,14 +937,22 @@ func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, k
 		}
 	}
 
-	if err := cmd.sizeBuffer(policy.compress()); err != nil {
+	initialSize := cmd.dataOffset
+	if binEncoder != nil {
+		if hint, ok := binEncoder.(BinSizeHint); ok {
+			initialSize += hint.EncodedBinsSizeHint()
+		}
+	}
+	if err := cmd.sizeBufferSz(initialSize, policy.compress()); err != nil {
 		return err
 	}
 
-	if binMap == nil {
+	if binMap == nil && binEncoder == nil {
 		cmd.writeHeaderWrite(policy, _INFO2_WRITE, fieldCount, len(bins))
-	} else {
+	} else if binMap != nil {
 		cmd.writeHeaderWrite(policy, _INFO2_WRITE, fieldCount, len(binMap))
+	} else {
+		cmd.writeHeaderWrite(policy, _INFO2_WRITE, fieldCount, 0)
 	}
 
 	if err := cmd.writeKeyWithPolicy(&policy.BasePolicy, key, true); err != nil {
@@ -766,18 +965,24 @@ func (cmd *baseCommand) setWrite(policy *WritePolicy, operation OperationType, k
 		}
 	}
 
-	if binMap == nil {
+	if binMap == nil && binEncoder == nil {
 		for i := range bins {
 			if err := cmd.writeOperationForBin(bins[i], operation); err != nil {
 				return err
 			}
 		}
-	} else {
+	} else if binMap != nil {
 		for name, value := range binMap {
 			if err := cmd.writeOperationForBinNameAndValue(name, value, operation); err != nil {
 				return err
 			}
 		}
+	} else {
+		writer := BinWriter{cmd: cmd, operation: operation}
+		if err := binEncoder.WriteBins(writer); err != nil {
+			return err
+		}
+		cmd.patchOperationCount(cmd.operationCount)
 	}
 
 	cmd.end()
@@ -3033,6 +3238,10 @@ func (cmd *baseCommand) estimateOperationSizeForBinNameAndValue(name string, val
 	return nil
 }
 
+func (cmd *baseCommand) estimateOperationSizeForBinNameAndSize(name string, valueSize int) {
+	cmd.dataOffset += len(name) + int(_OPERATION_HEADER_SIZE) + valueSize
+}
+
 func (cmd *baseCommand) estimateOperationSizeForOperation(operation *Operation, isBatch bool) Error {
 	if isBatch && operation.opType.isWrite {
 		return newError(types.PARAMETER_ERROR, "Write operations not allowed in batch read")
@@ -3405,6 +3614,21 @@ func (cmd *baseCommand) writeOperationForBinNameAndValue(name string, val any, o
 	return err
 }
 
+func (cmd *baseCommand) writeOperationForBinNameAndParticleType(name string, particleType int, valueLength int, operation OperationType) Error {
+	nameLength, valid := cmd.writeAndValidateBinName(name)
+	if !valid {
+		return newError(types.BIN_NAME_TOO_LONG, fmt.Sprintf("Bin name `%s` too long or empty, it must be between 1 and %d bytes.", name, maxBinNameLength))
+	}
+
+	cmd.WriteInt32(int32(nameLength + valueLength + 4))
+	cmd.WriteByte(operation.op)
+	cmd.WriteByte(byte(particleType))
+	cmd.WriteByte(0)
+	cmd.WriteByte(byte(nameLength))
+	cmd.dataOffset += nameLength
+	return nil
+}
+
 func (cmd *baseCommand) writeBatchReadOperations(ops []*Operation, readAttr int) (byte, Error) {
 	for _, op := range ops {
 		switch op.opType {
@@ -3584,6 +3808,39 @@ func (cmd *baseCommand) sizeBuffer(compress bool) Error {
 	return cmd.sizeBufferSz(cmd.dataOffset, compress)
 }
 
+func (cmd *baseCommand) ensureWriteCapacity(extra int) Error {
+	size := cmd.dataOffset + extra
+	if size <= len(cmd.dataBuffer) {
+		return nil
+	}
+
+	if size > MaxBufferSize || size < 0 {
+		return newCustomNodeError(cmd.node, types.PARSE_ERROR, fmt.Sprintf("Invalid size for buffer: %d", size))
+	}
+
+	newSize := len(cmd.dataBuffer) * 2
+	if newSize < size {
+		newSize = size
+	}
+	if newSize < int(_MSG_TOTAL_HEADER_SIZE) {
+		newSize = int(_MSG_TOTAL_HEADER_SIZE)
+	}
+
+	if cmd.dataBufferCompress != nil {
+		buf := buffPool.Get(newSize + msgHeaderPad + zlibHeaderPad)
+		view := buf[msgHeaderPad+zlibHeaderPad:]
+		copy(view, cmd.dataBuffer[:cmd.dataOffset])
+		cmd.dataBufferCompress = buf
+		cmd.dataBuffer = view
+		return nil
+	}
+
+	buf := buffPool.Get(newSize)
+	copy(buf, cmd.dataBuffer[:cmd.dataOffset])
+	cmd.dataBuffer = buf
+	return nil
+}
+
 func (cmd *baseCommand) validateHeader(header int64) Error {
 	msgVersion := (uint64(header) & 0xFF00000000000000) >> 56
 	if msgVersion != 2 {
@@ -3651,6 +3908,10 @@ func (cmd *baseCommand) sizeBufferSz(size int, willCompress bool) Error {
 func (cmd *baseCommand) end() {
 	var proto = int64(cmd.dataOffset-8) | (_CL_MSG_VERSION << 56) | (_AS_MSG_TYPE << 48)
 	binary.BigEndian.PutUint64(cmd.dataBuffer[0:], uint64(proto))
+}
+
+func (cmd *baseCommand) patchOperationCount(operationCount int) {
+	binary.BigEndian.PutUint16(cmd.dataBuffer[28:], uint16(operationCount))
 }
 
 func (cmd *baseCommand) markCompressed(policy Policy) {
